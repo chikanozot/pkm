@@ -12,12 +12,13 @@ import { AgendaScreen } from "./components/AgendaScreen.js";
 import { FinanceiroScreen } from "./components/FinanceiroScreen.js";
 import { ServicosScreen } from "./components/ServicosScreen.js";
 import { GoogleCalendarConfig } from "./components/GoogleCalendarConfig.js";
+import { UsersManagementScreen } from "./components/UsersManagementScreen.js";
 import { motion, AnimatePresence } from "motion/react";
 import { 
-  LayoutDashboard, Users, CalendarDays, DollarSign, Sparkles, Settings, LogOut, Menu, X, BookOpen, AlertCircle
+  LayoutDashboard, Users, CalendarDays, DollarSign, Sparkles, Settings, LogOut, Menu, X, BookOpen, AlertCircle, Shield
 } from "lucide-react";
 
-type ActiveTab = "dashboard" | "agenda" | "clientes" | "financeiro" | "servicos" | "config";
+type ActiveTab = "dashboard" | "agenda" | "clientes" | "financeiro" | "servicos" | "config" | "users";
 
 const Layout: React.FC = () => {
   const { user, logout, isDemo } = useAuth();
@@ -33,6 +34,10 @@ const Layout: React.FC = () => {
     { id: "config" as ActiveTab, label: "Integrações", icon: Settings },
   ];
 
+  if (user?.role === "master") {
+    menuItems.push({ id: "users" as ActiveTab, label: "Gerenciar Usuários", icon: Shield });
+  }
+
   const renderActiveScreen = () => {
     switch (activeTab) {
       case "dashboard":
@@ -47,6 +52,8 @@ const Layout: React.FC = () => {
         return <ServicosScreen />;
       case "config":
         return <GoogleCalendarConfig />;
+      case "users":
+        return <UsersManagementScreen />;
       default:
         return <Dashboard />;
     }

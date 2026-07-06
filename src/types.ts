@@ -87,6 +87,8 @@ export interface GoogleConnection {
 
 export interface UserSession {
   id: string;
-  email: string;
-  nome?: string;
+  username: string;
+  nome: string;
+  role: "master" | "user";
+  email?: string;
 }

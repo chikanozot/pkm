@@ -9,13 +9,134 @@ import { Cliente, Servico, Atendimento, Despesa, UserSession } from "../types.js
 // ==========================================
 // SQL SCRIPT FOR SUPABASE (For User Reference)
 // ==========================================
-export const SUPABASE_SQL_SCHEMA = `-- 1. Habilitar a extensão UUID se não estiver habilitada
+export const SUPABASE_SQL_SCHEMA = `-- 1. Habilitar a extensão pgcrypto para hash de senhas e uuid-ossp
+create extension if not exists "pgcrypto";
 create extension if not exists "uuid-ossp";
 
--- 2. Tabela de Clientes
+-- 2. Criar a Tabela de Usuários Customizada (Login sem e-mail)
+create table public.users (
+    id uuid default gen_random_uuid() primary key,
+    username text unique not null,
+    password_hash text not null,
+    nome text not null,
+    role text default 'user' not null check (role in ('master', 'user')),
+    created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- Criar índice único case-insensitive no username
+create unique index if not exists idx_users_username_lower on public.users (lower(username));
+
+-- 3. Função para obter o ID do usuário atual do sistema (Suporta RLS customizada)
+create or replace function public.current_app_user_id()
+returns uuid as $$
+begin
+  if current_setting('app.current_user_id', true) is not null and current_setting('app.current_user_id', true) <> '' then
+    return current_setting('app.current_user_id', true)::uuid;
+  end if;
+  return auth.uid();
+end;
+$$ language plpgsql stable;
+
+-- 4. Função para verificar se o usuário atual é Master
+create or replace function public.is_master_user()
+returns boolean as $$
+declare
+  v_role text;
+begin
+  select role into v_role from public.users where id = public.current_app_user_id();
+  return coalesce(v_role = 'master', false);
+end;
+$$ language plpgsql stable security definer;
+
+-- 5. Seed do usuário administrador MASTER inicial
+-- Usuário: zotgod | Senha: Caio1993
+insert into public.users (username, password_hash, nome, role)
+values (
+  'zotgod',
+  crypt('Caio1993', gen_salt('bf', 8)),
+  'Administrador Master',
+  'master'
+) on conflict (username) do update
+set password_hash = crypt('Caio1993', gen_salt('bf', 8)), nome = 'Administrador Master', role = 'master';
+
+-- 6. RPC para autenticar usuário (Sem expor hashes no cliente)
+create or replace function public.authenticate_user(p_username text, p_password text)
+returns table (
+  id uuid,
+  username text,
+  nome text,
+  role text,
+  created_at timestamp with time zone
+) as $$
+begin
+  return query
+  select u.id, u.username, u.nome, u.role, u.created_at
+  from public.users u
+  where lower(u.username) = lower(p_username)
+    and u.password_hash = crypt(p_password, u.password_hash);
+end;
+$$ language plpgsql security definer;
+
+-- 7. RPC para criar usuário do sistema com senha criptografada (Usado pelo master)
+create or replace function public.create_system_user(p_username text, p_password text, p_nome text, p_role text default 'user')
+returns table (
+  id uuid,
+  username text,
+  nome text,
+  role text,
+  created_at timestamp with time zone
+) as $$
+declare
+  v_user_id uuid;
+begin
+  insert into public.users (username, password_hash, nome, role)
+  values (lower(p_username), crypt(p_password, gen_salt('bf', 8)), p_nome, p_role)
+  returning public.users.id into v_user_id;
+
+  return query
+  select u.id, u.username, u.nome, u.role, u.created_at
+  from public.users u
+  where u.id = v_user_id;
+end;
+$$ language plpgsql security definer;
+
+-- 8. RPC para atualizar usuário do sistema (com senha opcional)
+create or replace function public.update_system_user(p_id uuid, p_username text, p_password text, p_nome text, p_role text)
+returns table (
+  id uuid,
+  username text,
+  nome text,
+  role text,
+  created_at timestamp with time zone
+) as $$
+begin
+  if p_password is not null and p_password <> '' then
+    update public.users
+    set username = lower(p_username),
+        password_hash = crypt(p_password, gen_salt('bf', 8)),
+        nome = p_nome,
+        role = p_role
+    where public.users.id = p_id;
+  else
+    update public.users
+    set username = lower(p_username),
+        nome = p_nome,
+        role = p_role
+    where public.users.id = p_id;
+  end if;
+
+  return query
+  select u.id, u.username, u.nome, u.role, u.created_at
+  from public.users u
+  where u.id = p_id;
+end;
+$$ language plpgsql security definer;
+
+
+-- 9. Tabela de Clientes
 create table public.clientes (
-    id uuid default uuid_generate_v4() primary key,
-    user_id uuid references auth.users(id) on delete cascade not null,
+    id uuid default gen_random_uuid() primary key,
+    user_id uuid references public.users(id) on delete cascade not null,
     nome text not null,
     telefone text,
     whatsapp text,
@@ -33,23 +154,14 @@ create table public.clientes (
 alter table public.clientes enable row level security;
 
 -- Políticas de Segurança (RLS) para clientes
-create policy "Profissionais podem ler seus próprios clientes" 
-on public.clientes for select using (auth.uid() = user_id);
-
-create policy "Profissionais podem inserir seus próprios clientes" 
-on public.clientes for insert with check (auth.uid() = user_id);
-
-create policy "Profissionais podem atualizar seus próprios clientes" 
-on public.clientes for update using (auth.uid() = user_id);
-
-create policy "Profissionais podem deletar seus próprios clientes" 
-on public.clientes for delete using (auth.uid() = user_id);
+create policy "Controle de acesso para clientes" 
+on public.clientes for all using (public.is_master_user() or public.current_app_user_id() = user_id);
 
 
--- 3. Tabela de Serviços
+-- 10. Tabela de Serviços
 create table public.servicos (
-    id uuid default uuid_generate_v4() primary key,
-    user_id uuid references auth.users(id) on delete cascade not null,
+    id uuid default gen_random_uuid() primary key,
+    user_id uuid references public.users(id) on delete cascade not null,
     nome text not null,
     valor numeric(10,2) not null,
     duracao integer not null, -- em minutos
@@ -60,23 +172,14 @@ create table public.servicos (
 
 alter table public.servicos enable row level security;
 
-create policy "Profissionais podem ler seus próprios serviços" 
-on public.servicos for select using (auth.uid() = user_id);
-
-create policy "Profissionais podem inserir seus próprios serviços" 
-on public.servicos for insert with check (auth.uid() = user_id);
-
-create policy "Profissionais podem atualizar seus próprios serviços" 
-on public.servicos for update using (auth.uid() = user_id);
-
-create policy "Profissionais podem deletar seus próprios serviços" 
-on public.servicos for delete using (auth.uid() = user_id);
+create policy "Controle de acesso para serviços" 
+on public.servicos for all using (public.is_master_user() or public.current_app_user_id() = user_id);
 
 
--- 4. Tabela de Atendimentos
+-- 11. Tabela de Atendimentos
 create table public.atendimentos (
-    id uuid default uuid_generate_v4() primary key,
-    user_id uuid references auth.users(id) on delete cascade not null,
+    id uuid default gen_random_uuid() primary key,
+    user_id uuid references public.users(id) on delete cascade not null,
     cliente_id uuid references public.clientes(id) on delete cascade not null,
     servico_id uuid references public.servicos(id) on delete restrict not null,
     data date not null,
@@ -92,7 +195,7 @@ create table public.atendimentos (
     pago boolean default false not null,
     fiado boolean default false not null,
     data_prevista_recebimento date,
-    valor_received numeric(10,2) default 0.00 not null,
+    valor_recebido numeric(10,2) default 0.00 not null,
     desconto numeric(10,2) default 0.00 not null,
     acrescimos numeric(10,2) default 0.00 not null,
     
@@ -107,23 +210,14 @@ create table public.atendimentos (
 
 alter table public.atendimentos enable row level security;
 
-create policy "Profissionais podem ler seus próprios atendimentos" 
-on public.atendimentos for select using (auth.uid() = user_id);
-
-create policy "Profissionais podem inserir seus próprios atendimentos" 
-on public.atendimentos for insert with check (auth.uid() = user_id);
-
-create policy "Profissionais podem atualizar seus próprios atendimentos" 
-on public.atendimentos for update using (auth.uid() = user_id);
-
-create policy "Profissionais podem deletar seus próprios atendimentos" 
-on public.atendimentos for delete using (auth.uid() = user_id);
+create policy "Controle de acesso para atendimentos" 
+on public.atendimentos for all using (public.is_master_user() or public.current_app_user_id() = user_id);
 
 
--- 5. Tabela de Despesas Gerais
+-- 12. Tabela de Despesas Gerais
 create table public.despesas (
-    id uuid default uuid_generate_v4() primary key,
-    user_id uuid references auth.users(id) on delete cascade not null,
+    id uuid default gen_random_uuid() primary key,
+    user_id uuid references public.users(id) on delete cascade not null,
     categoria text not null,
     descricao text not null,
     valor numeric(10,2) not null,
@@ -135,23 +229,14 @@ create table public.despesas (
 
 alter table public.despesas enable row level security;
 
-create policy "Profissionais podem ler suas próprias despesas" 
-on public.despesas for select using (auth.uid() = user_id);
-
-create policy "Profissionais podem inserir suas próprias despesas" 
-on public.despesas for insert with check (auth.uid() = user_id);
-
-create policy "Profissionais podem atualizar suas próprias despesas" 
-on public.despesas for update using (auth.uid() = user_id);
-
-create policy "Profissionais podem deletar suas próprias despesas" 
-on public.despesas for delete using (auth.uid() = user_id);
+create policy "Controle de acesso para despesas" 
+on public.despesas for all using (public.is_master_user() or public.current_app_user_id() = user_id);
 
 
--- 6. Tabela de Conexões Google Calendar
+-- 13. Tabela de Conexões Google Calendar
 create table public.google_connections (
-    id uuid default uuid_generate_v4() primary key,
-    user_id uuid references auth.users(id) on delete cascade not null,
+    id uuid default gen_random_uuid() primary key,
+    user_id uuid references public.users(id) on delete cascade not null,
     access_token text not null,
     refresh_token text not null,
     expiry_date bigint not null,
@@ -162,17 +247,9 @@ create table public.google_connections (
 
 alter table public.google_connections enable row level security;
 
-create policy "Profissionais podem ler sua própria conexão google" 
-on public.google_connections for select using (auth.uid() = user_id);
+create policy "Controle de acesso para conexões google" 
+on public.google_connections for all using (public.is_master_user() or public.current_app_user_id() = user_id);
 
-create policy "Profissionais podem salvar sua própria conexão google" 
-on public.google_connections for insert with check (auth.uid() = user_id);
-
-create policy "Profissionais podem atualizar sua própria conexão google" 
-on public.google_connections for update using (auth.uid() = user_id);
-
-create policy "Profissionais podem deletar sua própria conexão google" 
-on public.google_connections for delete using (auth.uid() = user_id);
 
 -- Índices recomendados para otimização
 create index idx_clientes_user on public.clientes(user_id);
@@ -536,6 +613,12 @@ initLocalDatabase();
 const getLocal = (key: string) => JSON.parse(localStorage.getItem(key) || "[]");
 const setLocal = (key: string, data: any) => localStorage.setItem(key, JSON.stringify(data));
 
+const getUserIdForLocal = (id: string) => {
+  if (id === "00000000-0000-0000-0000-000000000002") return "demo-user";
+  if (id === "00000000-0000-0000-0000-000000000001") return "master-id";
+  return id;
+};
+
 // ==========================================
 // DB SERVICE METHODS (BRIDGED DIRECTLY FOR SUPABASE & MOCK)
 // ==========================================
@@ -544,19 +627,20 @@ export const databaseService = {
   // ==========================================
   // CLIENTS SERVICE
   // ==========================================
-  async getClientes(userId: string): Promise<Cliente[]> {
+  async getClientes(userId: string, role?: string): Promise<Cliente[]> {
     if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase
-        .from("clientes")
-        .select("*")
-        .eq("user_id", userId)
-        .order("nome", { ascending: true });
+      let query = supabase.from("clientes").select("*");
+      if (role !== "master") {
+        query = query.eq("user_id", userId);
+      }
+      const { data, error } = await query.order("nome", { ascending: true });
 
       if (error) throw error;
       return data || [];
     } else {
       const all = getLocal("estetica_clients");
-      return all.filter((c: Cliente) => c.user_id === userId || userId === "demo-user");
+      const normalizedId = getUserIdForLocal(userId);
+      return all.filter((c: Cliente) => role === "master" || c.user_id === normalizedId || normalizedId === "demo-user");
     }
   },
 
@@ -631,19 +715,20 @@ export const databaseService = {
   // ==========================================
   // SERVICES SERVICE
   // ==========================================
-  async getServicos(userId: string): Promise<Servico[]> {
+  async getServicos(userId: string, role?: string): Promise<Servico[]> {
     if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase
-        .from("servicos")
-        .select("*")
-        .eq("user_id", userId)
-        .order("nome", { ascending: true });
+      let query = supabase.from("servicos").select("*");
+      if (role !== "master") {
+        query = query.eq("user_id", userId);
+      }
+      const { data, error } = await query.order("nome", { ascending: true });
 
       if (error) throw error;
       return data || [];
     } else {
       const all = getLocal("estetica_services");
-      return all.filter((s: Servico) => s.user_id === userId || userId === "demo-user");
+      const normalizedId = getUserIdForLocal(userId);
+      return all.filter((s: Servico) => role === "master" || s.user_id === normalizedId || normalizedId === "demo-user");
     }
   },
 
@@ -712,16 +797,17 @@ export const databaseService = {
   // ==========================================
   // APPOINTMENTS SERVICE
   // ==========================================
-  async getAtendimentos(userId: string): Promise<Atendimento[]> {
+  async getAtendimentos(userId: string, role?: string): Promise<Atendimento[]> {
     if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase
-        .from("atendimentos")
-        .select(`
+      let query = supabase.from("atendimentos").select(`
           *,
           cliente:clientes(*),
           servico:servicos(*)
-        `)
-        .eq("user_id", userId)
+        `);
+      if (role !== "master") {
+        query = query.eq("user_id", userId);
+      }
+      const { data, error } = await query
         .order("data", { ascending: false })
         .order("hora", { ascending: false });
 
@@ -732,7 +818,8 @@ export const databaseService = {
       const clients = getLocal("estetica_clients");
       const services = getLocal("estetica_services");
 
-      const filtered = appointments.filter((a: Atendimento) => a.user_id === userId || userId === "demo-user");
+      const normalizedId = getUserIdForLocal(userId);
+      const filtered = appointments.filter((a: Atendimento) => role === "master" || a.user_id === normalizedId || normalizedId === "demo-user");
       
       return filtered.map((app: Atendimento) => {
         return {
@@ -996,19 +1083,20 @@ export const databaseService = {
   // ==========================================
   // EXPENSES SERVICE
   // ==========================================
-  async getDespesas(userId: string): Promise<Despesa[]> {
+  async getDespesas(userId: string, role?: string): Promise<Despesa[]> {
     if (isSupabaseConfigured && supabase) {
-      const { data, error } = await supabase
-        .from("despesas")
-        .select("*")
-        .eq("user_id", userId)
-        .order("data", { ascending: false });
+      let query = supabase.from("despesas").select("*");
+      if (role !== "master") {
+        query = query.eq("user_id", userId);
+      }
+      const { data, error } = await query.order("data", { ascending: false });
 
       if (error) throw error;
       return data || [];
     } else {
       const all = getLocal("estetica_expenses");
-      return all.filter((e: Despesa) => e.user_id === userId || userId === "demo-user");
+      const normalizedId = getUserIdForLocal(userId);
+      return all.filter((e: Despesa) => role === "master" || e.user_id === normalizedId || normalizedId === "demo-user");
     }
   },
 
@@ -1070,6 +1158,97 @@ export const databaseService = {
       const all = getLocal("estetica_expenses");
       const filtered = all.filter((e: Despesa) => e.id !== id);
       setLocal("estetica_expenses", filtered);
+      return true;
+    }
+  },
+
+  // ==========================================
+  // USERS MANAGEMENT SERVICE (Master Only)
+  // ==========================================
+  async getSystemUsers(): Promise<any[]> {
+    if (isSupabaseConfigured && supabase) {
+      const { data, error } = await supabase
+        .from("users")
+        .select("id, username, nome, role, created_at")
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      return data || [];
+    } else {
+      const all = getLocal("estetica_users") || [];
+      if (all.length === 0) {
+        // Se vazio, adicione o master padrão no mockup
+        const defaultMaster = { id: "master-id", username: "zotgod", nome: "Master Admin", role: "master", created_at: new Date().toISOString() };
+        all.push(defaultMaster);
+        setLocal("estetica_users", all);
+      }
+      return all;
+    }
+  },
+
+  async insertSystemUser(payload: { username: string; password_hash: string; nome: string; role: string }): Promise<any> {
+    if (isSupabaseConfigured && supabase) {
+      const { data, error } = await supabase.rpc("create_system_user", {
+        p_username: payload.username,
+        p_password: payload.password_hash,
+        p_nome: payload.nome,
+        p_role: payload.role
+      });
+
+      if (error) throw error;
+      return data && data[0];
+    } else {
+      const all = getLocal("estetica_users") || [];
+      const newUser = {
+        id: "u-" + Math.random().toString(36).substr(2, 9),
+        username: payload.username,
+        nome: payload.nome,
+        role: payload.role,
+        created_at: new Date().toISOString()
+      };
+      all.push(newUser);
+      setLocal("estetica_users", all);
+      return newUser;
+    }
+  },
+
+  async updateSystemUser(id: string, payload: { username: string; password_hash?: string; nome: string; role: string }): Promise<any> {
+    if (isSupabaseConfigured && supabase) {
+      const { data, error } = await supabase.rpc("update_system_user", {
+        p_id: id,
+        p_username: payload.username,
+        p_password: payload.password_hash || "",
+        p_nome: payload.nome,
+        p_role: payload.role
+      });
+
+      if (error) throw error;
+      return data && data[0];
+    } else {
+      const all = getLocal("estetica_users") || [];
+      const idx = all.findIndex((u: any) => u.id === id);
+      if (idx !== -1) {
+        all[idx] = { ...all[idx], username: payload.username, nome: payload.nome, role: payload.role };
+        setLocal("estetica_users", all);
+        return all[idx];
+      }
+      return null;
+    }
+  },
+
+  async deleteSystemUser(id: string): Promise<boolean> {
+    if (isSupabaseConfigured && supabase) {
+      const { error } = await supabase
+        .from("users")
+        .delete()
+        .eq("id", id);
+
+      if (error) throw error;
+      return true;
+    } else {
+      const all = getLocal("estetica_users") || [];
+      const filtered = all.filter((u: any) => u.id !== id);
+      setLocal("estetica_users", filtered);
       return true;
     }
   }

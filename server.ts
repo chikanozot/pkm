@@ -27,10 +27,31 @@ app.use(express.json());
 
 // Helper to initialize Supabase server-side client
 function getSupabase() {
-  const url = process.env.SUPABASE_URL || "";
-  const key = process.env.SUPABASE_ANON_KEY || "";
-  if (!url || !key) return null;
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
+  const key = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
+  if (!url || !key) {
+    const isProduction = process.env.NODE_ENV === "production";
+    if (isProduction) {
+      throw new Error("Supabase environment variables (SUPABASE_URL / SUPABASE_ANON_KEY) are missing in production!");
+    }
+    return null;
+  }
   return createClient(url, key);
+}
+
+// Helper to resolve app URL dynamically based on visited host to support production (Vercel) automatically
+function getAppUrl(req: express.Request) {
+  let appUrl = process.env.APP_URL || "";
+  if (!appUrl) {
+    const host = req.headers.host || "";
+    if (host && !host.includes("localhost") && !host.includes("127.0.0.1")) {
+      const protocol = req.headers["x-forwarded-proto"] || "https";
+      appUrl = `${protocol}://${host}`;
+    } else {
+      appUrl = `http://localhost:${PORT}`;
+    }
+  }
+  return appUrl;
 }
 
 // Temporary in-memory session for OAuth if Supabase is not configured yet (Demo Fallback)
@@ -48,7 +69,7 @@ app.get("/api/auth/google/url", (req, res) => {
   }
 
   const clientId = process.env.GOOGLE_CLIENT_ID || "";
-  const appUrl = process.env.APP_URL || `http://localhost:${PORT}`;
+  const appUrl = getAppUrl(req);
 
   if (!clientId) {
     return res.status(400).json({
@@ -84,7 +105,7 @@ app.get(["/auth/google/callback", "/auth/google/callback/"], async (req, res) =>
   try {
     const clientId = process.env.GOOGLE_CLIENT_ID || "";
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET || "";
-    const appUrl = process.env.APP_URL || `http://localhost:${PORT}`;
+    const appUrl = getAppUrl(req);
 
     if (!clientId || !clientSecret) {
       throw new Error("Google Client ID or Client Secret is not configured.");

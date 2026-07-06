@@ -6,12 +6,12 @@
 import React, { useState } from "react";
 import { useAuth } from "../contexts/AuthContext.js";
 import { motion } from "motion/react";
-import { Lock, Mail, User, Sparkles, AlertCircle } from "lucide-react";
+import { Lock, User, Sparkles, AlertCircle } from "lucide-react";
 
 export const AuthScreen: React.FC = () => {
   const { login, signup, error, isDemo } = useAuth();
   const [isLogin, setIsLogin] = useState(true);
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
@@ -24,12 +24,12 @@ export const AuthScreen: React.FC = () => {
 
     try {
       if (isLogin) {
-        await login(email, password);
+        await login(username, password);
       } else {
         if (!name.trim()) {
           throw new Error("Por favor, insira seu nome profissional.");
         }
-        await signup(email, password, name);
+        await signup(username, password, name);
       }
     } catch (err: any) {
       setFormError(err.message || "Ocorreu um erro no formulário.");
@@ -106,18 +106,18 @@ export const AuthScreen: React.FC = () => {
 
             <div>
               <label className="block text-xs font-semibold text-stone-700 tracking-wide uppercase mb-1.5">
-                E-mail
+                Usuário (Username)
               </label>
               <div className="relative">
                 <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-stone-400">
-                  <Mail className="w-4 h-4" />
+                  <User className="w-4 h-4" />
                 </span>
                 <input
-                  type="email"
+                  type="text"
                   required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="seu@email.com"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="zotgod ou seu_usuario"
                   className="pl-10 block w-full rounded-xl border border-stone-200 bg-white/50 px-3.5 py-2.5 text-sm placeholder-stone-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500 transition-all shadow-sm"
                 />
               </div>
