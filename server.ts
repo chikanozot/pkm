@@ -116,8 +116,13 @@ app.get("/api/auth/google/url", (req, res) => {
 app.get(["/auth/google/callback", "/auth/google/callback/"], async (req, res) => {
   const { code, state: userId, error } = req.query;
 
+  console.log("[Google OAuth Callback Server] >>> STAGE 1: Arrived at callback route.");
+  console.log(`[Google OAuth Callback Server] - Code present: ${!!code}`);
+  console.log(`[Google OAuth Callback Server] - State/userId: ${userId}`);
+  console.log(`[Google OAuth Callback Server] - Error: ${error || "None"}`);
+
   if (error) {
-    console.error("Google OAuth error on callback:", error);
+    console.error("[Google OAuth Callback Server] Google OAuth error on callback:", error);
     return res.status(400).send(`
       <html>
         <body style="font-family: sans-serif; text-align: center; padding: 40px; background-color: #f9fafb;">
@@ -130,6 +135,7 @@ app.get(["/auth/google/callback", "/auth/google/callback/"], async (req, res) =>
   }
 
   if (!code || !userId || typeof code !== "string" || typeof userId !== "string") {
+    console.warn("[Google OAuth Callback Server] Invalid callback arguments:", { code: !!code, userId });
     return res.status(400).send("Invalid callback arguments");
   }
 
@@ -138,14 +144,28 @@ app.get(["/auth/google/callback", "/auth/google/callback/"], async (req, res) =>
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET || "";
     const appUrl = getAppUrl(req);
 
+    console.log(`[Google OAuth Callback Server] >>> STAGE 2: Settings check:`);
+    console.log(`- GOOGLE_CLIENT_ID configured: ${!!clientId}`);
+    console.log(`- GOOGLE_CLIENT_SECRET configured: ${!!clientSecret}`);
+    console.log(`- appUrl: ${appUrl}`);
+
     if (!clientId || !clientSecret) {
-      throw new Error("Google Client ID or Client Secret is not configured.");
+      throw new Error("Google Client ID or Client Secret is not configured on the server environment variables.");
     }
 
+    console.log("[Google OAuth Callback Server] >>> STAGE 3: Swapping code for tokens with Google...");
     const tokens = await exchangeCodeForTokens(code, appUrl, clientId, clientSecret);
     const expiryDate = Date.now() + tokens.expires_in * 1000;
 
+    console.log("[Google OAuth Callback Server] Tokens successfully received from Google:");
+    console.log(`- access_token: ${tokens.access_token ? tokens.access_token.substring(0, 15) + "..." : "missing"}`);
+    console.log(`- refresh_token: ${tokens.refresh_token ? tokens.refresh_token.substring(0, 15) + "..." : "missing"}`);
+    console.log(`- expires_in: ${tokens.expires_in} seconds`);
+    console.log(`- expiry_date (timestamp): ${expiryDate}`);
+
     const supabase = getSupabase();
+    console.log(`[Google OAuth Callback Server] >>> STAGE 4: Database check. Supabase initialized: ${!!supabase}`);
+
     if (supabase) {
       // Real database persistence
       const connectionData = {
@@ -156,24 +176,56 @@ app.get(["/auth/google/callback", "/auth/google/callback/"], async (req, res) =>
         lembretes_minutos: 30, // Default 30 min reminder
       };
 
+      console.log("[Google OAuth Callback Server] Preparing to insert/upsert in public.google_connections with payload:", {
+        user_id: connectionData.user_id,
+        expiry_date: connectionData.expiry_date,
+        lembretes_minutos: connectionData.lembretes_minutos,
+        access_token_prefix: connectionData.access_token.substring(0, 10) + "...",
+        refresh_token_prefix: connectionData.refresh_token ? connectionData.refresh_token.substring(0, 10) + "..." : "null"
+      });
+
       // Check if user already has a connection
-      const { data: existing } = await supabase
+      console.log(`[Google OAuth Callback Server] Querying existing connection in DB for user_id: ${userId}`);
+      const { data: existing, error: selectError } = await supabase
         .from("google_connections")
         .select("id")
         .eq("user_id", userId)
         .maybeSingle();
 
+      if (selectError) {
+        console.error("[Google OAuth Callback Server] Supabase SELECT error:", selectError);
+      } else {
+        console.log(`[Google OAuth Callback Server] SELECT complete. Existing record found:`, existing);
+      }
+
       if (existing) {
-        await supabase
+        console.log(`[Google OAuth Callback Server] Record exists. Executing UPDATE for user_id: ${userId}`);
+        const { error: updateError } = await supabase
           .from("google_connections")
           .update(connectionData)
           .eq("user_id", userId);
+
+        if (updateError) {
+          console.error("[Google OAuth Callback Server] Supabase UPDATE failed with error:", updateError);
+          throw new Error(`Supabase UPDATE error: ${updateError.message || JSON.stringify(updateError)}`);
+        } else {
+          console.log("[Google OAuth Callback Server] Supabase UPDATE succeeded! Connection updated.");
+        }
       } else {
-        await supabase
+        console.log(`[Google OAuth Callback Server] No existing record. Executing INSERT for user_id: ${userId}`);
+        const { error: insertError } = await supabase
           .from("google_connections")
           .insert([connectionData]);
+
+        if (insertError) {
+          console.error("[Google OAuth Callback Server] Supabase INSERT failed with error:", insertError);
+          throw new Error(`Supabase INSERT error: ${insertError.message || JSON.stringify(insertError)}`);
+        } else {
+          console.log("[Google OAuth Callback Server] Supabase INSERT succeeded! Connection saved.");
+        }
       }
     } else {
+      console.log("[Google OAuth Callback Server] Supabase client is not initialized. Using fallback demo session storage.");
       // Demo state fallback
       demoGoogleConnections.set(userId, {
         user_id: userId,
@@ -183,6 +235,8 @@ app.get(["/auth/google/callback", "/auth/google/callback/"], async (req, res) =>
         lembretes_minutos: 30,
       });
     }
+
+    console.log("[Google OAuth Callback Server] >>> STAGE 5: Sending successful authentication response to popup.");
 
     // Auth Success Page inside popup
     res.send(`
