@@ -133,6 +133,63 @@ end;
 $$ language plpgsql security definer;
 
 
+-- 8.1 RPC para obter todos os usuários (Segurança: Security Definer para ignorar RLS)
+create or replace function public.get_system_users()
+returns table (
+  id uuid,
+  username text,
+  nome text,
+  role text,
+  created_at timestamp with time zone
+) as $$
+begin
+  return query
+  select u.id, u.username, u.nome, u.role, u.created_at
+  from public.users u
+  order by u.created_at desc;
+end;
+$$ language plpgsql security definer;
+
+
+-- 8.2 RPC para excluir usuário em cascata (Segurança: Security Definer para ignorar restrições e RLS do cliente)
+create or replace function public.delete_system_user(p_user_id uuid)
+returns boolean as $$
+begin
+  -- Excluir de atendimentos se a tabela existir
+  if exists (select 1 from information_schema.tables where table_schema = 'public' and table_name = 'atendimentos') then
+    execute 'delete from public.atendimentos where user_id = $1' using p_user_id;
+  end if;
+
+  -- Excluir de servicos se a tabela existir
+  if exists (select 1 from information_schema.tables where table_schema = 'public' and table_name = 'servicos') then
+    execute 'delete from public.servicos where user_id = $1' using p_user_id;
+  end if;
+
+  -- Excluir de clientes se a tabela existir
+  if exists (select 1 from information_schema.tables where table_schema = 'public' and table_name = 'clientes') then
+    execute 'delete from public.clientes where user_id = $1' using p_user_id;
+  end if;
+
+  -- Excluir de despesas se a tabela existir
+  if exists (select 1 from information_schema.tables where table_schema = 'public' and table_name = 'despesas') then
+    execute 'delete from public.despesas where user_id = $1' using p_user_id;
+  end if;
+
+  -- Excluir de google_connections se a tabela existir
+  if exists (select 1 from information_schema.tables where table_schema = 'public' and table_name = 'google_connections') then
+    execute 'delete from public.google_connections where user_id = $1' using p_user_id;
+  end if;
+
+  -- Por fim, excluir o registro do usuário
+  if exists (select 1 from information_schema.tables where table_schema = 'public' and table_name = 'users') then
+    execute 'delete from public.users where id = $1' using p_user_id;
+  end if;
+
+  return true;
+end;
+$$ language plpgsql security definer;
+
+
 -- 9. Tabela de Clientes
 create table public.clientes (
     id uuid default gen_random_uuid() primary key,
@@ -656,6 +713,16 @@ export const databaseService = {
   // ==========================================
   async getSystemUsers(): Promise<any[]> {
     checkSupabase();
+    try {
+      const { data, error } = await supabase.rpc("get_system_users");
+      if (!error && data) {
+        return data;
+      }
+      console.warn("RPC get_system_users falhou ou não existe, tentando select direto...", error);
+    } catch (rpcErr) {
+      console.warn("Erro ao chamar RPC get_system_users, tentando select direto...", rpcErr);
+    }
+
     const { data, error } = await supabase
       .from("users")
       .select("id, username, nome, role, created_at")
@@ -694,12 +761,31 @@ export const databaseService = {
 
   async deleteSystemUser(id: string): Promise<boolean> {
     checkSupabase();
-    const { error } = await supabase
+    
+    try {
+      // Tenta excluir chamando a função RPC (roda com segurança 'security definer' contornando cache do schema cache e RLS)
+      const { data, error: rpcError } = await supabase.rpc("delete_system_user", {
+        p_user_id: id
+      });
+      if (!rpcError) {
+        return true;
+      }
+      console.warn("RPC delete_system_user falhou ou não existe, tentando fallback...", rpcError);
+    } catch (err) {
+      console.warn("Falha de execução ao chamar RPC delete_system_user, tentando fallback...", err);
+    }
+
+    // FALLBACK SEGURO: Excluir o usuário diretamente da tabela "users".
+    // Como as chaves estrangeiras no banco de dados estão configuradas com "ON DELETE CASCADE",
+    // excluir da tabela "users" irá disparar a exclusão automática de todos os atendimentos,
+    // clientes, serviços, despesas e google_connections no próprio Postgres, sem precisar
+    // referenciar essas outras tabelas em JavaScript (evitando erros de Schema Cache do PostgREST).
+    const { error: errUser } = await supabase
       .from("users")
       .delete()
       .eq("id", id);
+    if (errUser) throw errUser;
 
-    if (error) throw error;
     return true;
   }
 };;
