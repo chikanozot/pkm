@@ -57,11 +57,54 @@ export const GoogleCalendarConfig: React.FC = () => {
 
   const handleConnect = async () => {
     if (!user) return;
+    let responseCode: number | null = null;
+    let responseBodyText = "";
+    
     try {
       const res = await fetch(`/api/auth/google/url?userId=${user.id}`);
-      const data = await res.json();
-      if (data.error) {
-        alert(data.error);
+      responseCode = res.status;
+      responseBodyText = await res.text();
+      
+      // Try to parse as JSON to inspect error field
+      let parsedData: any = null;
+      try {
+        parsedData = JSON.parse(responseBodyText);
+      } catch (e) {
+        // Not JSON, that's fine
+      }
+
+      if (!res.ok) {
+        const errorMsg = parsedData?.error || parsedData?.message || "Erro retornado pelo servidor";
+        const detailedError = `Erro ao obter URL de autenticação do Google.\n\n` +
+          `- Código HTTP: ${responseCode}\n` +
+          `- Mensagem do Backend: ${errorMsg}\n` +
+          `- Corpo da Resposta: ${responseBodyText.substring(0, 300)}${responseBodyText.length > 300 ? "..." : ""}`;
+        
+        console.error("[Google OAuth Error Browser] Detailed response error:", {
+          status: responseCode,
+          body: responseBodyText,
+          parsed: parsedData
+        });
+        
+        alert(detailedError);
+        return;
+      }
+
+      if (!parsedData || !parsedData.url) {
+        const errorMsg = parsedData?.error || "Resposta do servidor não possui a URL de redirecionamento.";
+        const detailedError = `Erro ao obter URL de autenticação do Google.\n\n` +
+          `- Código HTTP: ${responseCode}\n` +
+          `- Mensagem: Resposta inválida\n` +
+          `- Detalhes: ${errorMsg}\n` +
+          `- Corpo da Resposta: ${responseBodyText}`;
+          
+        console.error("[Google OAuth Error Browser] Invalid response format:", {
+          status: responseCode,
+          body: responseBodyText,
+          parsed: parsedData
+        });
+        
+        alert(detailedError);
         return;
       }
       
@@ -72,13 +115,18 @@ export const GoogleCalendarConfig: React.FC = () => {
       const top = window.screen.height / 2 - height / 2;
       
       window.open(
-        data.url,
+        parsedData.url,
         "google_oauth_popup",
         `width=${width},height=${height},top=${top},left=${left},resizable=yes,scrollbars=yes`
       );
-    } catch (err) {
-      console.error("Erro ao abrir OAuth Google", err);
-      alert("Erro ao obter URL de autenticação do Google.");
+    } catch (err: any) {
+      console.error("[Google OAuth Error Browser] Exception during fetch:", err);
+      const detailedError = `Erro ao obter URL de autenticação do Google.\n\n` +
+        `- Detalhes da Exceção: ${err?.message || String(err)}\n` +
+        (responseCode ? `- Código HTTP: ${responseCode}\n` : "") +
+        (responseBodyText ? `- Corpo da Resposta: ${responseBodyText.substring(0, 300)}${responseBodyText.length > 300 ? "..." : ""}` : "");
+      
+      alert(detailedError);
     }
   };
 

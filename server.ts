@@ -81,22 +81,36 @@ const demoGoogleConnections = new Map<string, any>();
 
 // 1. Get Google OAuth URL
 app.get("/api/auth/google/url", (req, res) => {
-  const { userId } = req.query;
-  if (!userId || typeof userId !== "string") {
-    return res.status(400).json({ error: "userId is required" });
-  }
+  try {
+    const { userId } = req.query;
+    if (!userId || typeof userId !== "string") {
+      const errMsg = "userId parameter is missing or invalid in query";
+      console.error(`[Google OAuth Error Server] ${errMsg}`);
+      return res.status(400).json({ error: errMsg });
+    }
 
-  const clientId = process.env.GOOGLE_CLIENT_ID || "";
-  const appUrl = getAppUrl(req);
+    const clientId = process.env.GOOGLE_CLIENT_ID || "";
+    const appUrl = getAppUrl(req);
 
-  if (!clientId) {
-    return res.status(400).json({
-      error: "Google Client ID not configured. Set GOOGLE_CLIENT_ID in secrets.",
+    if (!clientId) {
+      const errMsg = "Google Client ID is not configured on the server. Please check your environment variables/secrets (GOOGLE_CLIENT_ID).";
+      console.error(`[Google OAuth Error Server] ${errMsg}`);
+      return res.status(400).json({
+        error: errMsg,
+        hint: "Make sure process.env.GOOGLE_CLIENT_ID is set correctly on Vercel/environment."
+      });
+    }
+
+    const authUrl = getGoogleAuthUrl(userId, appUrl, clientId);
+    res.json({ url: authUrl });
+  } catch (err: any) {
+    console.error("[Google OAuth Error Server] Failed to generate authentication URL:", err);
+    res.status(500).json({
+      error: "Internal server error occurred while generating Google auth URL",
+      message: err?.message || String(err),
+      stack: err?.stack || ""
     });
   }
-
-  const authUrl = getGoogleAuthUrl(userId, appUrl, clientId);
-  res.json({ url: authUrl });
 });
 
 // 2. Google OAuth Callback
