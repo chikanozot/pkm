@@ -84,30 +84,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } catch {
         setUser(null);
       }
-      setLoading(false);
-    } else if (isSupabaseConfigured && supabase) {
-      setLoading(false);
     } else {
-      // Offline/Demo Fallback authentication
-      const savedDemo = localStorage.getItem("estetica_demo_session");
-      const loggedOut = localStorage.getItem("estetica_logged_out") === "true";
-
-      if (savedDemo && !loggedOut) {
-        try {
-          setUser(JSON.parse(savedDemo));
-        } catch {
-          setUser(null);
-        }
-      } else if (!loggedOut) {
-        // Automatically sign in to the demo-user for rapid preview testing!
-        const defaultDemo: UserSession = { id: "00000000-0000-0000-0000-000000000002", username: "demo", nome: "Dra. Carol Silveira", role: "master" };
-        setUser(defaultDemo);
-        localStorage.setItem("estetica_demo_session", JSON.stringify(defaultDemo));
-      } else {
-        setUser(null);
-      }
-      setLoading(false);
+      setUser(null);
     }
+    setLoading(false);
   }, []);
 
   const login = async (username: string, password: string) => {
@@ -120,78 +100,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const lowerUsername = username.trim().toLowerCase();
 
-      if (isSupabaseConfigured && supabase) {
-        try {
-          const { data, error: err } = await supabase.rpc("authenticate_user", {
-            p_username: lowerUsername,
-            p_password: password
-          });
+      if (!isSupabaseConfigured || !supabase) {
+        throw new Error("Erro: O banco de dados Supabase não está configurado. Por favor, adicione as variáveis de ambiente VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY nas configurações do seu projeto.");
+      }
 
-          if (err) {
-            if (err.message?.includes("function") && err.message?.includes("authenticate_user")) {
-              throw new Error("O script SQL do banco de dados ainda não foi executado no Supabase. Por favor, copie e execute o script SQL disponível na aba 'Integrações' no seu painel do Supabase.");
-            }
-            throw err;
-          }
-          
-          if (data && data.length > 0) {
-            const authUser = data[0];
-            const sessionUser: UserSession = {
-              id: authUser.id,
-              username: authUser.username,
-              nome: authUser.nome,
-              role: authUser.role as "master" | "user",
-              email: authUser.username + "@pkm.com"
-            };
-            setUser(sessionUser);
-            localStorage.setItem("pkm_user_session", JSON.stringify(sessionUser));
-            localStorage.removeItem("estetica_logged_out");
-          } else {
-            throw new Error("Usuário ou senha incorretos.");
-          }
-        } catch (rpcErr: any) {
-          if (rpcErr.message?.includes("script SQL") || rpcErr.message?.includes("Integrações")) {
-            throw rpcErr;
-          }
-          // If RPC fails (e.g. function missing) and they typed the master credentials, let them log in as mockup
-          if (lowerUsername === "zotgod" && password === "Caio1993") {
-            const demoSession: UserSession = {
-              id: "00000000-0000-0000-0000-000000000001",
-              username: "zotgod",
-              nome: "Administrador Master (Demo)",
-              role: "master",
-              email: "zotgod@pkm.com"
-            };
-            setUser(demoSession);
-            localStorage.setItem("pkm_user_session", JSON.stringify(demoSession));
-            localStorage.removeItem("estetica_logged_out");
-            return;
-          }
-          throw rpcErr;
+      const { data, error: err } = await supabase.rpc("authenticate_user", {
+        p_username: lowerUsername,
+        p_password: password
+      });
+
+      if (err) {
+        if (err.message?.includes("function") && err.message?.includes("authenticate_user")) {
+          throw new Error("O script SQL do banco de dados ainda não foi executado no Supabase. Por favor, execute o script SQL no seu console SQL do Supabase.");
         }
-      } else {
-        // Mock Login
-        if (password.length < 6) throw new Error("A senha deve conter no mínimo 6 caracteres.");
-        
-        // Se for o master administrativo no mockup
-        const role = (lowerUsername === "zotgod") ? "master" as const : "user" as const;
-        const nome = (lowerUsername === "zotgod") ? "Administrador Master" : username.toUpperCase();
-
-        if (lowerUsername === "zotgod" && password !== "Caio1993") {
-          throw new Error("Senha incorreta para o usuário master.");
-        }
-
-        const demoSession: UserSession = {
-          id: lowerUsername === "zotgod" ? "00000000-0000-0000-0000-000000000001" : "00000000-0000-0000-0000-000000000002",
-          username: lowerUsername,
-          nome: nome,
-          role: role,
-          email: lowerUsername + "@pkm.com"
+        throw err;
+      }
+      
+      if (data && data.length > 0) {
+        const authUser = data[0];
+        const sessionUser: UserSession = {
+          id: authUser.id,
+          username: authUser.username,
+          nome: authUser.nome,
+          role: authUser.role as "master" | "user",
+          email: authUser.username + "@pkm.com"
         };
-        setUser(demoSession);
-        localStorage.setItem("pkm_user_session", JSON.stringify(demoSession));
-        localStorage.setItem("estetica_demo_session", JSON.stringify(demoSession));
+        setUser(sessionUser);
+        localStorage.setItem("pkm_user_session", JSON.stringify(sessionUser));
         localStorage.removeItem("estetica_logged_out");
+      } else {
+        throw new Error("Usuário ou senha incorretos.");
       }
     } catch (err: any) {
       setError(err.message || "Erro ao realizar o login.");
@@ -211,50 +149,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       const lowerUsername = username.trim().toLowerCase();
 
-      if (isSupabaseConfigured && supabase) {
-        const { data, error: err } = await supabase.rpc("create_system_user", {
-          p_username: lowerUsername,
-          p_password: password,
-          p_nome: name.trim(),
-          p_role: "user"
-        });
+      if (!isSupabaseConfigured || !supabase) {
+        throw new Error("Erro: O banco de dados Supabase não está configurado. Por favor, adicione as variáveis de ambiente VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY nas configurações do seu projeto.");
+      }
 
-        if (err) {
-          if (err.message?.includes("unique_users_username") || err.message?.includes("users_username_key")) {
-            throw new Error("Este nome de usuário já está em uso.");
-          }
-          throw err;
-        }
+      const { data, error: err } = await supabase.rpc("create_system_user", {
+        p_username: lowerUsername,
+        p_password: password,
+        p_nome: name.trim(),
+        p_role: "user"
+      });
 
-        if (data && data.length > 0) {
-          const authUser = data[0];
-          const sessionUser: UserSession = {
-            id: authUser.id,
-            username: authUser.username,
-            nome: authUser.nome,
-            role: authUser.role as "master" | "user",
-            email: authUser.username + "@pkm.com"
-          };
-          setUser(sessionUser);
-          localStorage.setItem("pkm_user_session", JSON.stringify(sessionUser));
-          localStorage.removeItem("estetica_logged_out");
-        } else {
-          throw new Error("Erro ao criar o usuário.");
+      if (err) {
+        if (err.message?.includes("unique_users_username") || err.message?.includes("users_username_key")) {
+          throw new Error("Este nome de usuário já está em uso.");
         }
-      } else {
-        // Mock Sign up
-        if (password.length < 6) throw new Error("A senha deve conter no mínimo 6 caracteres.");
-        const demoSession: UserSession = {
-          id: generateUUID(),
-          username: lowerUsername,
-          nome: name.trim(),
-          role: "user" as const,
-          email: lowerUsername + "@pkm.com"
+        throw err;
+      }
+
+      if (data && data.length > 0) {
+        const authUser = data[0];
+        const sessionUser: UserSession = {
+          id: authUser.id,
+          username: authUser.username,
+          nome: authUser.nome,
+          role: authUser.role as "master" | "user",
+          email: authUser.username + "@pkm.com"
         };
-        setUser(demoSession);
-        localStorage.setItem("pkm_user_session", JSON.stringify(demoSession));
-        localStorage.setItem("estetica_demo_session", JSON.stringify(demoSession));
+        setUser(sessionUser);
+        localStorage.setItem("pkm_user_session", JSON.stringify(sessionUser));
         localStorage.removeItem("estetica_logged_out");
+      } else {
+        throw new Error("Erro ao criar o usuário.");
       }
     } catch (err: any) {
       setError(err.message || "Erro ao realizar o cadastro.");
@@ -282,7 +208,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     <AuthContext.Provider value={{
       user,
       loading,
-      isDemo: !isSupabaseConfigured,
+      isDemo: false,
       login,
       signup,
       logout,

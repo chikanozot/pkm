@@ -9,7 +9,7 @@ import { motion } from "motion/react";
 import { Lock, User, Sparkles, AlertCircle } from "lucide-react";
 
 export const AuthScreen: React.FC = () => {
-  const { login, signup, error, isDemo } = useAuth();
+  const { login, signup, error } = useAuth();
   const [isLogin, setIsLogin] = useState(true);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -63,18 +63,6 @@ export const AuthScreen: React.FC = () => {
           transition={{ duration: 0.4 }}
           className="bg-white/80 backdrop-blur-md py-8 px-4 shadow-xl border border-stone-100 sm:rounded-2xl sm:px-10"
         >
-          {isDemo && (
-            <div className="mb-6 p-3 rounded-xl bg-amber-50/80 border border-amber-200 text-amber-800 text-xs flex items-start gap-2.5 shadow-sm">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
-              <div>
-                <span className="font-semibold">Modo de Demonstração Ativo</span>
-                <p className="mt-0.5 text-amber-700/90 leading-relaxed">
-                  Para conectar seu banco de dados Supabase definitivo, adicione suas credenciais no painel Configurações do sistema. Use qualquer credencial para testar agora!
-                </p>
-              </div>
-            </div>
-          )}
-
           {(error || formError) && (
             <div className="mb-6 p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-center gap-2.5">
               <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />

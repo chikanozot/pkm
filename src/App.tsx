@@ -21,7 +21,7 @@ import {
 type ActiveTab = "dashboard" | "agenda" | "clientes" | "financeiro" | "servicos" | "config" | "users";
 
 const Layout: React.FC = () => {
-  const { user, logout, isDemo } = useAuth();
+  const { user, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<ActiveTab>("dashboard");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -224,18 +224,6 @@ const Layout: React.FC = () => {
           MAIN PORTAL VIEW CONTAINER
           ========================================== */}
       <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-x-hidden">
-        {isDemo && (
-          <div className="mb-6 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 text-xs flex items-center justify-between gap-3 shadow-sm no-print">
-            <div className="flex items-start gap-2.5">
-              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-              <div>
-                <span className="font-semibold text-amber-900">Banco de Dados LocalAtivo (Demonstração)</span>
-                <p className="mt-0.5 text-amber-800/90">Os atendimentos, despesas, clientes e serviços estão sendo salvos e persistidos localmente no seu navegador. Para conectar o Supabase, vá na aba Integrações.</p>
-              </div>
-            </div>
-          </div>
-        )}
-
         <AnimatePresence mode="wait">
           <motion.div
             key={activeTab}
