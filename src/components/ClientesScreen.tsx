@@ -40,15 +40,48 @@ export const ClientesScreen: React.FC = () => {
   }, [user]);
 
   const loadData = async () => {
-    if (!user) return;
+    if (!user) {
+      console.log("[Diagnóstico Clientes] Nenhum usuário logado no aplicativo.");
+      return;
+    }
     setLoading(true);
+    
+    console.log("[Diagnóstico Clientes] >>> INICIANDO CARREGAMENTO DE CLIENTES <<<");
+    console.log("[Diagnóstico Clientes] - Usuário atual do aplicativo:", user);
+    console.log("[Diagnóstico Clientes] - user_id usado na consulta:", user.id);
+    console.log("[Diagnóstico Clientes] - user.role:", user.role);
+
     try {
+      // Log antes de executar a query
+      console.log("[Diagnóstico Clientes] - Executando SELECT * FROM clientes WHERE user_id =", user.id);
+      
       const dataClientes = await databaseService.getClientes(user.id);
+      
+      console.log("[Diagnóstico Clientes] - Retorno do Supabase (dataClientes):", dataClientes);
+      console.log("[Diagnóstico Clientes] - Quantidade de clientes retornados:", dataClientes ? dataClientes.length : 0);
+      
+      if (dataClientes && dataClientes.length > 0) {
+        console.log("[Diagnóstico Clientes] - Detalhes do primeiro cliente retornado:", {
+          id: dataClientes[0].id,
+          user_id: dataClientes[0].user_id,
+          nome: dataClientes[0].nome,
+          user_id_matches_current: dataClientes[0].user_id === user.id
+        });
+      } else {
+        console.warn(
+          "[Diagnóstico Clientes] - ATENÇÃO: Supabase retornou 0 clientes com sucesso (sem erro)." +
+          "\nIsso indica fortemente que existe um bloqueio de RLS (Row Level Security) ativado na tabela 'clientes' no console do Supabase," +
+          "\nou que os registros foram criados com um user_id diferente do ID do usuário atual do aplicativo."
+        );
+      }
+
       const dataAtendimentos = await databaseService.getAtendimentos(user.id);
+      console.log("[Diagnóstico Clientes] - Quantidade de atendimentos retornados:", dataAtendimentos ? dataAtendimentos.length : 0);
+
       setClientes(dataClientes);
       setAtendimentos(dataAtendimentos);
-    } catch (err) {
-      console.error("Erro ao carregar clientes", err);
+    } catch (err: any) {
+      console.error("[Diagnóstico Clientes] - Erro ao carregar dados do Supabase:", err);
     } finally {
       setLoading(false);
     }
@@ -156,7 +189,10 @@ export const ClientesScreen: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) return;
+    if (!user) {
+      console.log("[Diagnóstico Salvar Cliente] Nenhum usuário logado.");
+      return;
+    }
 
     const payload = {
       user_id: user.id,
@@ -172,15 +208,24 @@ export const ClientesScreen: React.FC = () => {
       ativo
     };
 
+    console.log("[Diagnóstico Salvar Cliente] >>> INICIANDO SALVAMENTO DE CLIENTE <<<");
+    console.log("[Diagnóstico Salvar Cliente] - Payload enviado para o Supabase:", payload);
+
     try {
       if (editId) {
-        await databaseService.updateCliente(editId, payload);
+        console.log("[Diagnóstico Salvar Cliente] - Executando UPDATE para cliente ID:", editId);
+        const result = await databaseService.updateCliente(editId, payload);
+        console.log("[Diagnóstico Salvar Cliente] - Resultado do UPDATE:", result);
       } else {
-        await databaseService.insertCliente(payload);
+        console.log("[Diagnóstico Salvar Cliente] - Executando INSERT");
+        const result = await databaseService.insertCliente(payload);
+        console.log("[Diagnóstico Salvar Cliente] - Resultado do INSERT:", result);
       }
+      console.log("[Diagnóstico Salvar Cliente] - Salvamento realizado com sucesso! Chamando loadData() para recarregar a lista...");
       loadData();
       handleCloseForm();
     } catch (err: any) {
+      console.error("[Diagnóstico Salvar Cliente] - Erro ao salvar cliente no Supabase:", err);
       console.error("[Supabase Save Client Error] Detailed error object:", err);
       
       const supabaseMsg = err?.message || (err && typeof err === 'object' ? JSON.stringify(err) : String(err));
