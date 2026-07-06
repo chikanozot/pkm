@@ -1,0 +1,261 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import { createClient } from "@supabase/supabase-js";
+
+// Helper to initialize Supabase server-side client
+function getSupabaseClient() {
+  const url = process.env.SUPABASE_URL || "";
+  const key = process.env.SUPABASE_ANON_KEY || "";
+  if (!url || !key) return null;
+  return createClient(url, key);
+}
+
+// 1. Construct Google OAuth Authorization URL
+export function getGoogleAuthUrl(userId: string, appUrl: string, clientId: string): string {
+  const redirectUri = `${appUrl}/auth/google/callback`;
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    scope: "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar",
+    access_type: "offline",
+    prompt: "consent",
+    state: userId, // Pass the professional's user ID so we can store the token under their account
+  });
+  return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+}
+
+// 2. Exchange Authorization Code for Access & Refresh Tokens
+export async function exchangeCodeForTokens(
+  code: string,
+  appUrl: string,
+  clientId: string,
+  clientSecret: string
+) {
+  const redirectUri = `${appUrl}/auth/google/callback`;
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: redirectUri,
+      grant_type: "authorization_code",
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Failed to exchange code: ${errText}`);
+  }
+
+  return response.json(); // { access_token, refresh_token, expires_in, token_type }
+}
+
+// 3. Refresh Access Token using Refresh Token
+export async function refreshGoogleAccessToken(
+  refreshToken: string,
+  clientId: string,
+  clientSecret: string
+) {
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token",
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Failed to refresh token: ${errText}`);
+  }
+
+  const data = await response.json();
+  return {
+    access_token: data.access_token,
+    expires_in: data.expires_in,
+  };
+}
+
+// 4. Retrieve or Refresh User's Google Credentials from Supabase
+export async function getUserGoogleConnection(userId: string) {
+  const supabase = getSupabaseClient();
+  if (!supabase) return null;
+
+  // Retrieve connections for this user
+  const { data, error } = await supabase
+    .from("google_connections")
+    .select("*")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error || !data) {
+    return null;
+  }
+
+  const now = Date.now();
+  // If token is expired or expires in the next 2 minutes, refresh it
+  if (data.expiry_date && now >= Number(data.expiry_date) - 120000) {
+    try {
+      const clientId = process.env.GOOGLE_CLIENT_ID || "";
+      const clientSecret = process.env.GOOGLE_CLIENT_SECRET || "";
+      if (!clientId || !clientSecret) return null;
+
+      const refreshData = await refreshGoogleAccessToken(data.refresh_token, clientId, clientSecret);
+      const newExpiry = Date.now() + refreshData.expires_in * 1000;
+
+      // Update in Supabase
+      const { error: updateError } = await supabase
+        .from("google_connections")
+        .update({
+          access_token: refreshData.access_token,
+          expiry_date: newExpiry,
+        })
+        .eq("user_id", userId);
+
+      if (updateError) {
+        console.error("Error updating refreshed token in Supabase:", updateError);
+      }
+
+      return {
+        ...data,
+        access_token: refreshData.access_token,
+        expiry_date: newExpiry,
+      };
+    } catch (err) {
+      console.error("Failed to refresh Google token:", err);
+      return null;
+    }
+  }
+
+  return data;
+}
+
+// 5. Create Google Calendar Event
+export async function createGoogleCalendarEvent(
+  accessToken: string,
+  event: {
+    summary: string;
+    description: string;
+    startDateTime: string; // ISO String
+    endDateTime: string;   // ISO String
+    remindersMinutes?: number;
+  }
+) {
+  const eventData = {
+    summary: event.summary,
+    description: event.description,
+    start: {
+      dateTime: event.startDateTime,
+      timeZone: "America/Sao_Paulo",
+    },
+    end: {
+      dateTime: event.endDateTime,
+      timeZone: "America/Sao_Paulo",
+    },
+    reminders: {
+      useDefault: event.remindersMinutes === undefined,
+      overrides: event.remindersMinutes !== undefined ? [
+        { method: "popup", minutes: event.remindersMinutes },
+        { method: "email", minutes: event.remindersMinutes },
+      ] : [],
+    },
+  };
+
+  const response = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(eventData),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Google Calendar Create Event error: ${errText}`);
+  }
+
+  const data = await response.json();
+  return data.id; // Returns Google Event ID
+}
+
+// 6. Update Google Calendar Event
+export async function updateGoogleCalendarEvent(
+  accessToken: string,
+  eventId: string,
+  event: {
+    summary: string;
+    description: string;
+    startDateTime: string;
+    endDateTime: string;
+    remindersMinutes?: number;
+  }
+) {
+  const eventData = {
+    summary: event.summary,
+    description: event.description,
+    start: {
+      dateTime: event.startDateTime,
+      timeZone: "America/Sao_Paulo",
+    },
+    end: {
+      dateTime: event.endDateTime,
+      timeZone: "America/Sao_Paulo",
+    },
+    reminders: {
+      useDefault: event.remindersMinutes === undefined,
+      overrides: event.remindersMinutes !== undefined ? [
+        { method: "popup", minutes: event.remindersMinutes },
+        { method: "email", minutes: event.remindersMinutes },
+      ] : [],
+    },
+  };
+
+  const response = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(eventData),
+    }
+  );
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Google Calendar Update Event error: ${errText}`);
+  }
+
+  return response.json();
+}
+
+// 7. Delete Google Calendar Event
+export async function deleteGoogleCalendarEvent(accessToken: string, eventId: string) {
+  const response = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`,
+    {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    }
+  );
+
+  if (!response.ok && response.status !== 404) {
+    const errText = await response.text();
+    throw new Error(`Google Calendar Delete Event error: ${errText}`);
+  }
+
+  return true;
+}
