@@ -375,6 +375,11 @@ app.post("/api/calendar/event/delete", async (req, res) => {
 // ==========================================
 
 async function startServer() {
+  if (process.env.VERCEL) {
+    console.log("Running on Vercel Serverless environment. Bypass express server listener.");
+    return;
+  }
+
   if (process.env.NODE_ENV !== "production") {
     // Development mode
     const vite = await createViteServer({
@@ -397,3 +402,5 @@ async function startServer() {
 }
 
 startServer();
+
+export default app;

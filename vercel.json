@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/api"
+    },
+    {
+      "source": "/auth/google/callback",
+      "destination": "/api"
+    },
+    {
+      "source": "/auth/google/callback/",
+      "destination": "/api"
+    },
+    {
+      "source": "/((?!api|auth/google/callback).*).*",
+      "destination": "/index.html"
+    }
+  ]
+}
