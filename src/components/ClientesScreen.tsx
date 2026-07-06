@@ -104,6 +104,56 @@ export const ClientesScreen: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
+  const parseAndNormalizeDate = (dateStr: string): string | null => {
+    if (!dateStr) return null;
+    const trimmed = dateStr.trim();
+    if (!trimmed) return null;
+
+    // Se o valor consistir apenas de caracteres de máscara como *, d, m, y, a, -, / ou espaços (por exemplo, "**", "**/**/****")
+    if (/^[*\s/-]+$/.test(trimmed) || /^[a-zA-Z\s/-]+$/.test(trimmed)) {
+      return null;
+    }
+
+    // Verifica se já está no formato YYYY-MM-DD
+    const yyyymmddRegex = /^(\d{4})-(\d{2})-(\d{2})$/;
+    if (yyyymmddRegex.test(trimmed)) {
+      const match = trimmed.match(yyyymmddRegex);
+      if (match) {
+        const year = parseInt(match[1], 10);
+        const month = parseInt(match[2], 10);
+        const day = parseInt(match[3], 10);
+        if (month >= 1 && month <= 12 && day >= 1 && day <= 31 && year > 1800 && year < 2100) {
+          return trimmed;
+        }
+      }
+      return null;
+    }
+
+    // Se estiver no formato DD/MM/YYYY ou DD-MM-YYYY (comum no Brasil)
+    const ddmmyyyyRegex = /^(\d{2})[/-](\d{2})[/-](\d{4})$/;
+    if (ddmmyyyyRegex.test(trimmed)) {
+      const match = trimmed.match(ddmmyyyyRegex);
+      if (match) {
+        const day = match[1];
+        const month = match[2];
+        const year = match[3];
+        return `${year}-${month}-${day}`;
+      }
+    }
+
+    // Se for outro formato, tenta fazer o parse usando Date nativo
+    const timestamp = Date.parse(trimmed);
+    if (!isNaN(timestamp)) {
+      const d = new Date(timestamp);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+
+    return null;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
@@ -113,7 +163,7 @@ export const ClientesScreen: React.FC = () => {
       nome,
       telefone,
       whatsapp,
-      data_nascimento: dataNascimento,
+      data_nascimento: parseAndNormalizeDate(dataNascimento),
       email,
       endereco,
       observacoes,

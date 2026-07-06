@@ -9,7 +9,7 @@ export interface Cliente {
   nome: string;
   telefone: string;
   whatsapp: string;
-  data_nascimento: string; // YYYY-MM-DD
+  data_nascimento: string | null; // YYYY-MM-DD
   email: string;
   endereco: string;
   observacoes: string;
