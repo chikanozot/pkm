@@ -98,9 +98,21 @@ export const ServicosScreen: React.FC = () => {
       }
       loadServicos();
       handleCloseForm();
-    } catch (err) {
-      console.error("Erro ao salvar serviço", err);
-      alert("Erro ao salvar serviço.");
+    } catch (err: any) {
+      console.error("[Supabase Save Service Error] Detailed error object:", err);
+      
+      const supabaseMsg = err?.message || (err && typeof err === 'object' ? JSON.stringify(err) : String(err));
+      const supabaseCode = err?.code || "N/A";
+      const supabaseDetails = err?.details || "N/A";
+      const supabaseHint = err?.hint || "N/A";
+      
+      const detailedError = `Erro ao salvar serviço.\n\n` +
+        `- Mensagem Completa: ${supabaseMsg}\n` +
+        `- Código do Erro: ${supabaseCode}\n` +
+        `- Detalhes: ${supabaseDetails}\n` +
+        `- Hint: ${supabaseHint}`;
+        
+      alert(detailedError);
     }
   };
 
