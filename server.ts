@@ -25,6 +25,24 @@ const PORT = 3000;
 
 app.use(express.json());
 
+// Middleware to normalize req.url in Vercel Serverless environment.
+// When Vercel rewrites a path (e.g. /auth/google/callback or /api/auth/google/url) to our serverless entrypoint /api,
+// Vercel changes req.url to /api. We can restore the original requested path from the "x-matched-path" header
+// so that Express's routing system matches the correct endpoint perfectly.
+app.use((req, res, next) => {
+  const matchedPath = req.headers["x-matched-path"];
+  if (matchedPath && typeof matchedPath === "string") {
+    try {
+      const url = new URL(req.url, "http://localhost");
+      url.pathname = matchedPath;
+      req.url = url.pathname + url.search;
+    } catch (e) {
+      console.error("Error normalizing req.url for Vercel:", e);
+    }
+  }
+  next();
+});
+
 // Helper to initialize Supabase server-side client
 function getSupabase() {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";

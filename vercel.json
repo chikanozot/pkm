@@ -1,23 +1,21 @@
 {
   "version": 2,
-  "builds": [
+  "rewrites": [
     {
-      "src": "server.ts",
-      "use": "@vercel/node"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "/server.ts"
+      "source": "/api/:path*",
+      "destination": "/api/index.ts"
     },
     {
-      "src": "/auth/google/callback",
-      "dest": "/server.ts"
+      "source": "/auth/google/callback",
+      "destination": "/api/index.ts"
     },
     {
-      "src": "/(.*)",
-      "dest": "/index.html"
+      "source": "/auth/google/callback/",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/((?!api|auth/google/callback).*)",
+      "destination": "/index.html"
     }
   ]
 }
