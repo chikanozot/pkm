@@ -172,9 +172,21 @@ export const AgendaScreen: React.FC = () => {
       }
       loadData();
       handleCloseForm();
-    } catch (err) {
-      console.error("Erro ao salvar agendamento", err);
-      alert("Erro ao salvar agendamento.");
+    } catch (err: any) {
+      console.error("[Supabase Save Appointment Error] Detailed error object:", err);
+      
+      const supabaseMsg = err?.message || (err && typeof err === 'object' ? JSON.stringify(err) : String(err));
+      const supabaseCode = err?.code || "N/A";
+      const supabaseDetails = err?.details || "N/A";
+      const supabaseHint = err?.hint || "N/A";
+      
+      const detailedError = `Erro no agendamento.\n\n` +
+        `- Mensagem Completa: ${supabaseMsg}\n` +
+        `- Código do Erro: ${supabaseCode}\n` +
+        `- Detalhes: ${supabaseDetails}\n` +
+        `- Hint: ${supabaseHint}`;
+        
+      alert(detailedError);
     }
   };
 
