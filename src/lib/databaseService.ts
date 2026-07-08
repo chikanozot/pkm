@@ -594,7 +594,7 @@ export const databaseService = {
           body: JSON.stringify({
             userId: atendimento.user_id,
             summary: `Estética: ${client?.nome || "Cliente"}`,
-            description: `Atendimento de Estética e Sobrancelhas\n\nCliente: ${client?.nome || ""}\nWhatsApp: ${client?.whatsapp || ""}\n\nServiços:\n${servicesText}\n\nValor: R$ ${atendimento.valor_cobrado.toFixed(2)}\nObservações: ${atendimento.observacoes || ""}`,
+            description: `Atendimento de Estética e Sobrancelhas\n\nCliente: ${client?.nome || ""}\nWhatsApp: ${client?.whatsapp || ""}\n\nServiços:\n${servicesText}\n\nObservações: ${atendimento.observacoes || ""}`,
             startDateTime,
             endDateTime,
           }),
@@ -747,7 +747,7 @@ export const databaseService = {
             body: JSON.stringify({
               userId: professionalId,
               summary: `Estética: ${client?.nome || "Cliente"}`,
-              description: `Atendimento de Estética e Sobrancelhas\n\nCliente: ${client?.nome || ""}\nWhatsApp: ${client?.whatsapp || ""}\n\nServiços:\n${servicesText}\n\nValor: R$ ${nextValor.toFixed(2)}`,
+              description: `Atendimento de Estética e Sobrancelhas\n\nCliente: ${client?.nome || ""}\nWhatsApp: ${client?.whatsapp || ""}\n\nServiços:\n${servicesText}`,
               startDateTime,
               endDateTime
             })
