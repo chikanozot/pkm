@@ -56,7 +56,7 @@ export const AgendaScreen: React.FC = () => {
   const [acrescimos, setAcrescimos] = useState(0);
   const [custo, setCusto] = useState(0);
   const [produtosUtilizados, setProdutosUtilizados] = useState<string[]>([]);
-  const [salvarValor, setSalvarValor] = useState(false);
+  const [salvarValor, setSalvarValor] = useState(true);
 
   // Multiple Services State and Helpers
   const [selectedServices, setSelectedServices] = useState<Array<{
@@ -212,7 +212,7 @@ export const AgendaScreen: React.FC = () => {
       setObservacoes("");
       setStatus("Agendado");
       setValorCobrado(firstService?.valor || 0);
-      setSalvarValor(false);
+      setSalvarValor(true);
       setFormaPagamento("Pix");
       setPago(false);
       setFiado(false);
@@ -326,20 +326,42 @@ export const AgendaScreen: React.FC = () => {
   // Conclude Appointment Modal Trigger
   const handleOpenCompleteModal = (at: Atendimento) => {
     setSelectedAppointment(at);
-    setValorCobrado(at.valor_cobrado || (at.servico?.valor || 0)); // Fallback to service base value if saved as 0
+    
+    const hasMultiple = at.servicos_detalhes && Array.isArray(at.servicos_detalhes) && at.servicos_detalhes.length > 0;
+    const totalServicosValor = hasMultiple
+      ? at.servicos_detalhes!.reduce((sum, s) => sum + Number(s.valor || 0), 0)
+      : (at.servico?.valor || 0);
+    
+    const totalServicosCusto = hasMultiple
+      ? at.servicos_detalhes!.reduce((sum, s) => sum + Number(s.custo || 0), 0)
+      : (at.servico?.custo || 0);
+
+    const totalServicosProdutos = hasMultiple
+      ? at.servicos_detalhes!.reduce((acc, s) => {
+          const orig = servicos.find(origS => origS.id === s.servico_id);
+          if (orig && orig.produtos) {
+            orig.produtos.forEach(p => {
+              if (!acc.includes(p)) acc.push(p);
+            });
+          }
+          return acc;
+        }, [] as string[])
+      : (at.servico?.produtos || []);
+
+    const valorCobradoInicial = at.valor_cobrado && at.valor_cobrado > 0 ? at.valor_cobrado : totalServicosValor;
+
+    setValorCobrado(valorCobradoInicial);
     setFormaPagamento(at.forma_pagamento || "Pix");
     setPago(true);
     setFiado(false);
     setDataPagamento(new Date().toISOString().substring(0, 10));
     setDataPrevistaRecebimento("");
-    setValorRecebido(at.valor_cobrado || (at.servico?.valor || 0));
+    setValorRecebido(valorCobradoInicial);
     setDesconto(0);
     setAcrescimos(0);
     
-    // Autofill cost estimates from typical service
-    const matchedService = servicos.find(s => s.id === at.servico_id);
-    setCusto(matchedService?.custo || 0);
-    setProdutosUtilizados(matchedService?.produtos || []);
+    setCusto(at.custo && at.custo > 0 ? at.custo : totalServicosCusto);
+    setProdutosUtilizados(at.produtos_utilizados && at.produtos_utilizados.length > 0 ? at.produtos_utilizados : totalServicosProdutos);
     
     setIsCompleteModalOpen(true);
   };

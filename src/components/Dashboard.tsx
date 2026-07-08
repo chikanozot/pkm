@@ -209,7 +209,13 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
   // Quick action modal handlers
   const handleOpenFinalize = (at: Atendimento) => {
     setFinalizeApt(at);
-    setFinalizeValorCobrado(at.valor_cobrado || at.servico?.valor || 0);
+    
+    const hasMultiple = at.servicos_detalhes && Array.isArray(at.servicos_detalhes) && at.servicos_detalhes.length > 0;
+    const totalServicosValor = hasMultiple
+      ? at.servicos_detalhes!.reduce((sum, s) => sum + Number(s.valor || 0), 0)
+      : (at.servico?.valor || 0);
+
+    setFinalizeValorCobrado(at.valor_cobrado || totalServicosValor);
     setFinalizeFormaPagamento(at.forma_pagamento || "Pix");
     setFinalizeDesconto(0);
     setFinalizeAcrescimos(0);
@@ -221,11 +227,29 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
 
     try {
       const valorRecebido = finalizeValorCobrado - finalizeDesconto + finalizeAcrescimos;
-      const custo = finalizeApt.custo || finalizeApt.servico?.custo || 0;
+      
+      const hasMultiple = finalizeApt.servicos_detalhes && Array.isArray(finalizeApt.servicos_detalhes) && finalizeApt.servicos_detalhes.length > 0;
+      const totalServicosCusto = hasMultiple
+        ? finalizeApt.servicos_detalhes!.reduce((sum, s) => sum + Number(s.custo || 0), 0)
+        : (finalizeApt.servico?.custo || 0);
+
+      const totalServicosProdutos = hasMultiple
+        ? finalizeApt.servicos_detalhes!.reduce((acc, s) => {
+            const orig = servicos.find(origS => origS.id === s.servico_id);
+            if (orig && orig.produtos) {
+              orig.produtos.forEach(p => {
+                if (!acc.includes(p)) acc.push(p);
+              });
+            }
+            return acc;
+          }, [] as string[])
+        : (finalizeApt.servico?.produtos || []);
+
+      const custo = finalizeApt.custo || totalServicosCusto;
       const lucroLiquido = valorRecebido - custo;
       const produtos = finalizeApt.produtos_utilizados && finalizeApt.produtos_utilizados.length > 0
         ? finalizeApt.produtos_utilizados
-        : (finalizeApt.servico?.produtos || []);
+        : totalServicosProdutos;
 
       await databaseService.updateAtendimento(finalizeApt.id, {
         status: "Concluído",
