@@ -268,8 +268,8 @@ export const AgendaScreen: React.FC = () => {
       return acc;
     }, [] as string[]);
 
-    // Check if saving the amount is checked
-    const finalValorCobrado = salvarValor ? valorCobrado : 0;
+    // Save the actual total value of all selected services as valor_cobrado, regardless of whether it is registered in cash flow immediately
+    const finalValorCobrado = valorCobrado;
     const finalValorRecebido = salvarValor ? (pago ? (valorCobrado - desconto + acrescimos) : valorRecebido) : 0;
     const netProfit = finalValorRecebido - finalCusto;
 
