@@ -397,8 +397,14 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
   const getTopServicesData = () => {
     const counts: { [key: string]: number } = {};
     activeAtendimentos.forEach(at => {
-      const srvName = at.servico?.nome || "Personalizado";
-      counts[srvName] = (counts[srvName] || 0) + 1;
+      if (at.servicos_detalhes && Array.isArray(at.servicos_detalhes) && at.servicos_detalhes.length > 0) {
+        at.servicos_detalhes.forEach(s => {
+          counts[s.nome] = (counts[s.nome] || 0) + 1;
+        });
+      } else {
+        const srvName = at.servico?.nome || "Personalizado";
+        counts[srvName] = (counts[srvName] || 0) + 1;
+      }
     });
 
     return Object.keys(counts)
@@ -477,7 +483,7 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
       .map(at => [
         new Date(at.data).toLocaleDateString("pt-BR"),
         at.cliente?.nome || "Cliente Avulso",
-        at.servico?.nome || "Serviço",
+        getServicosNomes(at),
         at.forma_pagamento || "Pix",
         `R$ ${at.valor_recebido.toFixed(2)}`
       ]);
@@ -674,7 +680,7 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
                     <div className="grid grid-cols-2 gap-2 text-xs">
                       <div>
                         <span className="text-stone-400 block font-bold uppercase text-[8px]">Procedimento</span>
-                        <span className="font-semibold">{at.servico?.nome || "Personalizado"}</span>
+                        <span className="font-semibold">{getServicosNomes(at)}</span>
                       </div>
                       <div>
                         <span className="text-stone-400 block font-bold uppercase text-[8px]">Valor Previsto</span>
@@ -1145,7 +1151,7 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <span className="text-[9px] font-bold text-stone-400 uppercase tracking-wider block">Procedimento</span>
-                  <span className="text-sm font-semibold text-stone-800">{selectedAptDetails.servico?.nome || "Personalizado"}</span>
+                  <span className="text-sm font-semibold text-stone-800">{getServicosNomes(selectedAptDetails)}</span>
                 </div>
                 <div>
                   <span className="text-[9px] font-bold text-stone-400 uppercase tracking-wider block">Profissional</span>
@@ -1240,7 +1246,7 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
             <div className="p-6 space-y-4">
               <div className="bg-stone-50 p-3 rounded-xl border border-stone-150 text-xs text-stone-600">
                 <p><strong>Cliente:</strong> {finalizeApt.cliente?.nome || "Cliente"}</p>
-                <p className="mt-1"><strong>Procedimento:</strong> {finalizeApt.servico?.nome || "Procedimento"} (Custo Insumo: R$ {(finalizeApt.servico?.custo || 0).toFixed(2)})</p>
+                <p className="mt-1"><strong>Procedimento:</strong> {getServicosNomes(finalizeApt)} (Custo Insumo: R$ {(finalizeApt.custo || 0).toFixed(2)})</p>
               </div>
 
               <div className="space-y-3">
@@ -1305,7 +1311,7 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
                 <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100 text-xs font-semibold text-emerald-800 flex justify-between items-center">
                   <span>Total Líquido Estimado:</span>
                   <span className="text-sm font-bold font-mono text-emerald-700">
-                    R$ {(finalizeValorCobrado - finalizeDesconto + finalizeAcrescimos - (finalizeApt.servico?.custo || 0)).toFixed(2)}
+                    R$ {(finalizeValorCobrado - finalizeDesconto + finalizeAcrescimos - (finalizeApt.custo || 0)).toFixed(2)}
                   </span>
                 </div>
               </div>
@@ -1351,7 +1357,7 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
             <div className="p-6 space-y-4">
               <div className="bg-stone-50 p-3 rounded-xl border border-stone-150 text-xs text-stone-650">
                 <p><strong>Cliente:</strong> {rescheduleApt.cliente?.nome || "Cliente"}</p>
-                <p className="mt-1"><strong>Procedimento:</strong> {rescheduleApt.servico?.nome || "Procedimento"}</p>
+                <p className="mt-1"><strong>Procedimento:</strong> {getServicosNomes(rescheduleApt)}</p>
               </div>
 
               <div className="space-y-3">

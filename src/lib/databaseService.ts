@@ -608,8 +608,9 @@ export const databaseService = {
       console.error("Failed to automatically create Google Calendar event:", e);
     }
 
+    const { cliente, servico, servicos_detalhes, atendimento_servicos, ...pureAtendimento } = atendimento as any;
     const docToInsert = {
-      ...atendimento,
+      ...pureAtendimento,
       google_event_id: googleEventId
     };
 
@@ -761,8 +762,9 @@ export const databaseService = {
       }
     }
 
+    const { cliente, servico, servicos_detalhes, atendimento_servicos, ...pureAtendimento } = atendimento as any;
     const docToUpdate = {
-      ...atendimento,
+      ...pureAtendimento,
       google_event_id: googleEventId
     };
 

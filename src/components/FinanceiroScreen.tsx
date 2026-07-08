@@ -38,6 +38,13 @@ export const FinanceiroScreen: React.FC = () => {
   });
   const [filterCategory, setFilterCategory] = useState("Todas");
 
+  const getServicosNomes = (at: Atendimento) => {
+    if (at.servicos_detalhes && Array.isArray(at.servicos_detalhes) && at.servicos_detalhes.length > 0) {
+      return at.servicos_detalhes.map(s => s.nome).join(", ");
+    }
+    return at.servico?.nome || "Aesthetics";
+  };
+
   const categories = [
     "Aluguel", "Água", "Luz", "Internet", "Produtos", "Materiais", 
     "Funcionários", "Marketing", "Equipamentos", "Impostos", "Outras despesas"
@@ -361,7 +368,7 @@ export const FinanceiroScreen: React.FC = () => {
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-semibold text-stone-800">{rev.cliente?.nome || "Cliente avulso"}</span>
                       <span className="bg-rose-50 text-rose-700 border border-rose-100 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full">
-                        {rev.servico?.nome || "Aesthetics"}
+                        {getServicosNomes(rev)}
                       </span>
                     </div>
                     <div className="flex items-center gap-3 text-[11px] text-stone-500 font-medium">

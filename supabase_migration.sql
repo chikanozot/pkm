@@ -2,17 +2,19 @@
 -- MIGRATION FOR RELATION-BASED MULTIPLE SERVICES PER APPOINTMENT (atendimento_servicos)
 -- =========================================================================
 
--- 1. Garantir que as colunas anteriores existem
+-- 1. Garantir que o campo servico_id da tabela de atendimentos seja opcional/nullable,
+-- permitindo múltiplos serviços sem depender de uma única chave estrangeira obrigatória.
+ALTER TABLE public.atendimentos 
+ALTER COLUMN servico_id DROP NOT NULL;
+
+-- 2. Garantir que as colunas anteriores existem
 ALTER TABLE public.servicos 
 ADD COLUMN IF NOT EXISTS custo NUMERIC(10,2) DEFAULT 0.00 NOT NULL;
 
 ALTER TABLE public.despesas 
 ADD COLUMN IF NOT EXISTS atendimento_id UUID REFERENCES public.atendimentos(id) ON DELETE CASCADE;
 
-ALTER TABLE public.atendimentos 
-ADD COLUMN IF NOT EXISTS servicos_detalhes JSONB DEFAULT '[]'::jsonb NOT NULL;
-
--- 2. Criar a tabela de relacionamento 'atendimento_servicos' para suportar múltiplos serviços por atendimento se não existir
+-- 3. Criar a tabela de relacionamento 'atendimento_servicos' para suportar múltiplos serviços por atendimento se não existir
 CREATE TABLE IF NOT EXISTS public.atendimento_servicos (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     atendimento_id UUID REFERENCES public.atendimentos(id) ON DELETE CASCADE NOT NULL,
@@ -23,10 +25,14 @@ CREATE TABLE IF NOT EXISTS public.atendimento_servicos (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- 3. Habilitar RLS para 'atendimento_servicos'
+-- 4. Criar índices para otimização de busca na nova tabela de relacionamento
+CREATE INDEX IF NOT EXISTS idx_atendimento_servicos_atendimento_id ON public.atendimento_servicos(atendimento_id);
+CREATE INDEX IF NOT EXISTS idx_atendimento_servicos_servico_id ON public.atendimento_servicos(servico_id);
+
+-- 5. Habilitar RLS para 'atendimento_servicos'
 ALTER TABLE public.atendimento_servicos ENABLE ROW LEVEL SECURITY;
 
--- 4. Criar política de RLS para 'atendimento_servicos' (remove se já existir para evitar erro de duplicação)
+-- 6. Criar política de RLS para 'atendimento_servicos' (remove se já existir para evitar erro de duplicação)
 DROP POLICY IF EXISTS "Controle de acesso para atendimento_servicos" ON public.atendimento_servicos;
 
 CREATE POLICY "Controle de acesso para atendimento_servicos"
@@ -46,23 +52,33 @@ ON public.atendimento_servicos FOR ALL USING (
     )
 );
 
--- 5. Migração de dados existentes de 'atendimentos' para 'atendimento_servicos'
--- Caso 5.1: Atendimentos que possuem dados em 'servicos_detalhes' do tipo array
-INSERT INTO public.atendimento_servicos (atendimento_id, servico_id, valor_aplicado, custo_aplicado, duracao_aplicada, created_at)
-SELECT 
-    a.id as atendimento_id,
-    (m.elem->>'servico_id')::uuid as servico_id,
-    (m.elem->>'valor')::numeric as valor_aplicado,
-    COALESCE((m.elem->>'custo')::numeric, 0.00) as custo_aplicado,
-    (m.elem->>'duracao')::integer as duracao_aplicada,
-    a.created_at
-FROM public.atendimentos a,
-LATERAL jsonb_array_elements(a.servicos_detalhes) m(elem)
-WHERE jsonb_typeof(a.servicos_detalhes) = 'array' 
-  AND jsonb_array_length(a.servicos_detalhes) > 0
-ON CONFLICT DO NOTHING;
+-- 7. Migração de dados existentes de 'atendimentos' para 'atendimento_servicos'
+-- Caso 7.1: Atendimentos que possuem dados em 'servicos_detalhes' do tipo array
+-- Primeiro garantimos que a coluna servicos_detalhes exista para a migração ler, se for o caso
+-- (se ela já existia com dados de um estado intermediário)
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name='atendimentos' AND column_name='servicos_detalhes'
+    ) THEN
+        INSERT INTO public.atendimento_servicos (atendimento_id, servico_id, valor_aplicado, custo_aplicado, duracao_aplicada, created_at)
+        SELECT 
+            a.id as atendimento_id,
+            (m.elem->>'servico_id')::uuid as servico_id,
+            (m.elem->>'valor')::numeric as valor_aplicado,
+            COALESCE((m.elem->>'custo')::numeric, 0.00) as custo_aplicado,
+            (m.elem->>'duracao')::integer as duracao_aplicada,
+            a.created_at
+        FROM public.atendimentos a,
+        LATERAL jsonb_array_elements(a.servicos_detalhes) m(elem)
+        WHERE jsonb_typeof(a.servicos_detalhes) = 'array' 
+          AND jsonb_array_length(a.servicos_detalhes) > 0
+        ON CONFLICT DO NOTHING;
+    END IF;
+END $$;
 
--- Caso 5.2: Atendimentos antigos que não possuem itens em 'servicos_detalhes'
+-- Caso 7.2: Atendimentos antigos que não possuem itens migrados ainda e têm o 'servico_id' direto na tabela 'atendimentos'
 INSERT INTO public.atendimento_servicos (atendimento_id, servico_id, valor_aplicado, custo_aplicado, duracao_aplicada, created_at)
 SELECT 
     a.id as atendimento_id,

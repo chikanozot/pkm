@@ -275,6 +275,13 @@ export const ClientesScreen: React.FC = () => {
     return atendimentos.filter(at => at.cliente_id === clientId);
   };
 
+  const getServicosNomes = (at: Atendimento) => {
+    if (at.servicos_detalhes && Array.isArray(at.servicos_detalhes) && at.servicos_detalhes.length > 0) {
+      return at.servicos_detalhes.map(s => s.nome).join(", ");
+    }
+    return at.servico?.nome || "Serviço Personalizado";
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -509,7 +516,7 @@ export const ClientesScreen: React.FC = () => {
                     {getHistoryOfClient(selectedCliente.id).map((at) => (
                       <div key={at.id} className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 hover:bg-stone-50/50">
                         <div>
-                          <p className="text-sm font-semibold text-stone-800">{at.servico?.nome || "Serviço Personalizado"}</p>
+                          <p className="text-sm font-semibold text-stone-800">{getServicosNomes(at)}</p>
                           <p className="text-xs text-stone-500 mt-0.5">
                             Data: <b>{new Date(at.data).toLocaleDateString("pt-BR")} às {at.hora}</b> • Duração: <b>{at.duracao} min</b>
                           </p>
