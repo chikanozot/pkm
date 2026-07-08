@@ -41,7 +41,7 @@ const Layout: React.FC = () => {
   const renderActiveScreen = () => {
     switch (activeTab) {
       case "dashboard":
-        return <Dashboard />;
+        return <Dashboard onNavigate={(tab) => setActiveTab(tab as ActiveTab)} />;
       case "agenda":
         return <AgendaScreen />;
       case "clientes":

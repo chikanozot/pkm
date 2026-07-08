@@ -14,6 +14,13 @@ import {
 export const AgendaScreen: React.FC = () => {
   const { user } = useAuth();
   const [atendimentos, setAtendimentos] = useState<Atendimento[]>([]);
+
+  const getServicosNomes = (at: Atendimento) => {
+    if (at.servicos_detalhes && Array.isArray(at.servicos_detalhes) && at.servicos_detalhes.length > 0) {
+      return at.servicos_detalhes.map(s => s.nome).join(", ");
+    }
+    return at.servico?.nome || "Serviço Personalizado";
+  };
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [servicos, setServicos] = useState<Servico[]>([]);
   const [loading, setLoading] = useState(true);
@@ -51,9 +58,81 @@ export const AgendaScreen: React.FC = () => {
   const [produtosUtilizados, setProdutosUtilizados] = useState<string[]>([]);
   const [salvarValor, setSalvarValor] = useState(false);
 
+  // Multiple Services State and Helpers
+  const [selectedServices, setSelectedServices] = useState<Array<{
+    servico_id: string;
+    nome: string;
+    valor: number;
+    duracao: number;
+    custo: number;
+  }>>([]);
+
+  const updateCalculations = (services: typeof selectedServices) => {
+    const totalV = services.reduce((sum, s) => sum + Number(s.valor || 0), 0);
+    const totalD = services.reduce((sum, s) => sum + Number(s.duracao || 0), 0);
+    const totalC = services.reduce((sum, s) => sum + Number(s.custo || 0), 0);
+    setValorCobrado(totalV);
+    setDuracao(totalD);
+    setCusto(totalC);
+  };
+
+  const handleAddServiceField = () => {
+    const defaultSvc = servicos[0];
+    if (!defaultSvc) return;
+    const newService = {
+      servico_id: defaultSvc.id,
+      nome: defaultSvc.nome,
+      valor: defaultSvc.valor,
+      duracao: defaultSvc.duracao,
+      custo: defaultSvc.custo || 0
+    };
+    const updated = [...selectedServices, newService];
+    setSelectedServices(updated);
+    updateCalculations(updated);
+  };
+
+  const handleRemoveServiceField = (index: number) => {
+    const updated = selectedServices.filter((_, i) => i !== index);
+    setSelectedServices(updated);
+    updateCalculations(updated);
+  };
+
+  const handleServiceFieldChange = (index: number, field: string, value: any) => {
+    const updated = [...selectedServices];
+    if (field === "servico_id") {
+      const original = servicos.find(s => s.id === value);
+      if (original) {
+        updated[index] = {
+          servico_id: original.id,
+          nome: original.nome,
+          valor: original.valor,
+          duracao: original.duracao,
+          custo: original.custo || 0
+        };
+      }
+    } else {
+      updated[index] = {
+        ...updated[index],
+        [field]: field === "nome" ? value : Number(value)
+      };
+    }
+    setSelectedServices(updated);
+    updateCalculations(updated);
+  };
+
   useEffect(() => {
     loadData();
   }, [user]);
+
+  useEffect(() => {
+    const handleOpenTrigger = () => {
+      handleOpenForm(null);
+    };
+    window.addEventListener("pkm-open-new-appointment", handleOpenTrigger);
+    return () => {
+      window.removeEventListener("pkm-open-new-appointment", handleOpenTrigger);
+    };
+  }, [clientes, servicos, selectedDate]);
 
   const loadData = async () => {
     if (!user) return;
@@ -106,6 +185,22 @@ export const AgendaScreen: React.FC = () => {
       setAcrescimos(at.acrescimos);
       setCusto(at.custo);
       setProdutosUtilizados(at.produtos_utilizados || []);
+
+      // Load multiple services
+      if (at.servicos_detalhes && Array.isArray(at.servicos_detalhes) && at.servicos_detalhes.length > 0) {
+        setSelectedServices(at.servicos_detalhes);
+      } else {
+        const mainService = servicos.find(s => s.id === at.servico_id);
+        setSelectedServices([
+          {
+            servico_id: at.servico_id,
+            nome: mainService?.nome || "Serviço",
+            valor: at.valor_cobrado,
+            duracao: at.duracao,
+            custo: at.custo || mainService?.custo || 0
+          }
+        ]);
+      }
     } else {
       setEditId(null);
       setClienteId(clientes[0]?.id || "");
@@ -128,6 +223,21 @@ export const AgendaScreen: React.FC = () => {
       setAcrescimos(0);
       setCusto(0);
       setProdutosUtilizados(firstService?.produtos || []);
+
+      // Initialize with first service as default
+      if (firstService) {
+        setSelectedServices([
+          {
+            servico_id: firstService.id,
+            nome: firstService.nome,
+            valor: firstService.valor,
+            duracao: firstService.duracao,
+            custo: firstService.custo || 0
+          }
+        ]);
+      } else {
+        setSelectedServices([]);
+      }
     }
     setIsFormOpen(true);
   };
@@ -141,10 +251,22 @@ export const AgendaScreen: React.FC = () => {
     e.preventDefault();
     if (!user) return;
 
-    // Fetch typical service details
-    const matchedService = servicos.find(s => s.id === servicoId);
-    const finalCusto = matchedService?.custo || 0;
-    const finalProdutos = matchedService?.produtos || [];
+    if (selectedServices.length === 0) {
+      alert("Por favor, selecione pelo menos um serviço!");
+      return;
+    }
+
+    // Typical service details (summed up)
+    const finalCusto = selectedServices.reduce((sum, s) => sum + Number(s.custo || 0), 0);
+    const finalProdutos = selectedServices.reduce((acc, s) => {
+      const orig = servicos.find(origS => origS.id === s.servico_id);
+      if (orig && orig.produtos) {
+        orig.produtos.forEach(p => {
+          if (!acc.includes(p)) acc.push(p);
+        });
+      }
+      return acc;
+    }, [] as string[]);
 
     // Check if saving the amount is checked
     const finalValorCobrado = salvarValor ? valorCobrado : 0;
@@ -154,7 +276,7 @@ export const AgendaScreen: React.FC = () => {
     const payload: Omit<Atendimento, "id" | "created_at"> = {
       user_id: user.id,
       cliente_id: clienteId,
-      servico_id: servicoId,
+      servico_id: selectedServices[0].servico_id, // first service as main for backward compatibility
       data,
       hora,
       duracao,
@@ -172,6 +294,7 @@ export const AgendaScreen: React.FC = () => {
       custo: finalCusto,
       produtos_utilizados: finalProdutos,
       lucro_liquido: netProfit,
+      servicos_detalhes: selectedServices,
     };
 
     try {
@@ -536,7 +659,7 @@ export const AgendaScreen: React.FC = () => {
                               </span>
                             </div>
                             <p className="text-xs font-medium text-stone-600 mt-1">
-                              Procedimento: <b>{at.servico?.nome || "Serviço Personalizado"}</b> • Duração: <b>{at.duracao} min</b>
+                              Procedimento: <b>{getServicosNomes(at)}</b> • Duração: <b>{at.duracao} min</b>
                             </p>
                             {at.observacoes && (
                               <p className="text-xs text-stone-400 mt-1 italic">Obs: {at.observacoes}</p>
@@ -611,7 +734,7 @@ export const AgendaScreen: React.FC = () => {
                         <div>
                           <p className="text-xs font-bold text-stone-850">{at.cliente?.nome}</p>
                           <p className="text-[11px] text-stone-500 mt-0.5">
-                            {at.servico?.nome} • <b>{new Date(at.data).toLocaleDateString("pt-BR")} às {at.hora}</b>
+                            {getServicosNomes(at)} • <b>{new Date(at.data).toLocaleDateString("pt-BR")} às {at.hora}</b>
                           </p>
                         </div>
                         <span className="text-xs font-bold text-stone-700">R$ {at.valor_cobrado.toFixed(2)}</span>
@@ -636,7 +759,7 @@ export const AgendaScreen: React.FC = () => {
                         <div>
                           <p className="text-xs font-bold text-emerald-900">{at.cliente?.nome}</p>
                           <p className="text-[11px] text-stone-500 mt-0.5">
-                            {at.servico?.nome} • Concluído em <b>{new Date(at.data).toLocaleDateString("pt-BR")}</b>
+                            {getServicosNomes(at)} • Concluído em <b>{new Date(at.data).toLocaleDateString("pt-BR")}</b>
                           </p>
                         </div>
                         <span className="text-xs font-bold text-emerald-700">R$ {at.valor_recebido.toFixed(2)}</span>
@@ -690,19 +813,108 @@ export const AgendaScreen: React.FC = () => {
                     </select>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-stone-700 tracking-wide uppercase mb-1">Procedimento Solicitado *</label>
-                    <select
-                      value={servicoId}
-                      onChange={(e) => handleServiceChange(e.target.value)}
-                      required
-                      className="block w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500 font-medium"
-                    >
-                      <option value="" disabled>Selecione um serviço</option>
-                      {servicos.map((s) => (
-                        <option key={s.id} value={s.id}>{s.nome} (R$ {s.valor.toFixed(2)})</option>
+                  {/* MULTIPLE SERVICES SECTION */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between border-b border-stone-100 pb-2">
+                      <label className="block text-xs font-bold text-stone-700 tracking-wide uppercase">Serviços Selecionados *</label>
+                      <button
+                        type="button"
+                        onClick={handleAddServiceField}
+                        className="flex items-center gap-1 text-xs font-semibold text-rose-600 hover:text-rose-700 transition-colors cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" /> Adicionar Serviço
+                      </button>
+                    </div>
+
+                    <div className="space-y-3 max-h-[250px] overflow-y-auto pr-1">
+                      {selectedServices.map((item, index) => (
+                        <div key={index} className="p-3 bg-stone-50 rounded-xl border border-stone-200/60 relative space-y-2">
+                          {selectedServices.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveServiceField(index)}
+                              className="absolute top-2.5 right-2.5 p-1 text-stone-400 hover:text-red-500 rounded-lg hover:bg-stone-200/50 transition-colors cursor-pointer"
+                              title="Remover Serviço"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+
+                          {/* Procedimento Dropdown */}
+                          <div>
+                            <label className="block text-[10px] font-bold text-stone-500 tracking-wider uppercase mb-0.5">Procedimento</label>
+                            <select
+                              value={item.servico_id}
+                              onChange={(e) => handleServiceFieldChange(index, "servico_id", e.target.value)}
+                              required
+                              className="block w-full rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-xs focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500 font-medium"
+                            >
+                              <option value="" disabled>Selecione um serviço</option>
+                              {servicos.map((s) => (
+                                <option key={s.id} value={s.id}>{s.nome}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {/* Grid with fields */}
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-[10px] font-bold text-stone-500 tracking-wider uppercase mb-0.5">Profissional</label>
+                              <input
+                                type="text"
+                                disabled
+                                value="Principal"
+                                className="block w-full rounded-lg border border-stone-200 bg-stone-100/60 px-2 py-1 text-xs font-medium text-stone-600 cursor-not-allowed"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-stone-500 tracking-wider uppercase mb-0.5">Valor (R$)</label>
+                              <input
+                                type="number"
+                                required
+                                value={item.valor}
+                                onChange={(e) => handleServiceFieldChange(index, "valor", e.target.value)}
+                                className="block w-full rounded-lg border border-stone-200 px-2 py-1 text-xs focus:border-rose-500 focus:outline-none"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-[10px] font-bold text-stone-500 tracking-wider uppercase mb-0.5">Duração (min)</label>
+                              <input
+                                type="number"
+                                required
+                                value={item.duracao}
+                                onChange={(e) => handleServiceFieldChange(index, "duracao", e.target.value)}
+                                className="block w-full rounded-lg border border-stone-200 px-2 py-1 text-xs focus:border-rose-500 focus:outline-none"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-stone-500 tracking-wider uppercase mb-0.5">Custo Insumos (R$)</label>
+                              <input
+                                type="number"
+                                required
+                                value={item.custo}
+                                onChange={(e) => handleServiceFieldChange(index, "custo", e.target.value)}
+                                className="block w-full rounded-lg border border-stone-200 px-2 py-1 text-xs focus:border-rose-500 focus:outline-none"
+                              />
+                            </div>
+                          </div>
+                        </div>
                       ))}
-                    </select>
+                    </div>
+
+                    {/* Resumo em tempo real */}
+                    <div className="bg-rose-50/50 p-3 rounded-xl border border-rose-100/60 text-xs text-stone-700 grid grid-cols-2 gap-y-1.5 gap-x-4 mt-2">
+                      <div>Duração Total: <span className="font-bold text-stone-900">{duracao} min</span></div>
+                      <div>Custo Insumos: <span className="font-bold text-stone-900">R$ {custo.toFixed(2)}</span></div>
+                      <div>Preço dos Serviços: <span className="font-bold text-stone-900">R$ {valorCobrado.toFixed(2)}</span></div>
+                      <div className="text-rose-700 font-semibold col-span-2 border-t border-rose-100/60 pt-1.5 flex justify-between">
+                        <span>Lucro Previsto:</span>
+                        <span>R$ {(valorCobrado - custo).toFixed(2)}</span>
+                      </div>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
@@ -835,8 +1047,8 @@ export const AgendaScreen: React.FC = () => {
             <form onSubmit={handleConcludeAppointment} className="p-6 overflow-y-auto space-y-4">
               {/* Checkout details */}
               <div className="bg-stone-50 border p-3.5 rounded-xl space-y-2 text-xs text-stone-600">
-                <p>Procedimento: <b>{selectedAppointment.servico?.nome || "Personalizado"}</b></p>
-                <p>Preço de Tabela: <b>R$ {(selectedAppointment.servico?.valor || 0).toFixed(2)}</b></p>
+                <p>Procedimento: <b>{getServicosNomes(selectedAppointment)}</b></p>
+                <p>Preço de Tabela: <b>R$ {(selectedAppointment.valor_cobrado || 0).toFixed(2)}</b></p>
               </div>
 
               {/* Financial values */}

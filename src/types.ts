@@ -62,6 +62,13 @@ export interface Atendimento {
   
   // Sync
   google_event_id?: string;
+  servicos_detalhes?: Array<{
+    servico_id: string;
+    nome: string;
+    valor: number;
+    duracao: number;
+    custo: number;
+  }>;
   created_at: string;
   
   // Joined fields for display

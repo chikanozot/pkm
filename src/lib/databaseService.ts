@@ -263,6 +263,7 @@ create table public.atendimentos (
     lucro_liquido numeric(10,2) not null,
     
     google_event_id text,
+    servicos_detalhes jsonb default '[]'::jsonb not null,
     created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
@@ -534,6 +535,13 @@ export const databaseService = {
         const client = clients.find(c => c.id === atendimento.cliente_id);
         const service = services.find(s => s.id === atendimento.servico_id);
 
+        let servicesText = "";
+        if (atendimento.servicos_detalhes && Array.isArray(atendimento.servicos_detalhes) && atendimento.servicos_detalhes.length > 0) {
+          servicesText = atendimento.servicos_detalhes.map(s => `• ${s.nome}`).join("\n");
+        } else {
+          servicesText = `• ${service?.nome || "Atendimento"}`;
+        }
+
         const startDateTime = `${atendimento.data}T${atendimento.hora}:00`;
         // Calculate end dateTime
         const startTime = new Date(startDateTime);
@@ -545,8 +553,8 @@ export const databaseService = {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             userId: atendimento.user_id,
-            summary: `Estética: ${client?.nome || "Cliente"} - ${service?.nome || "Atendimento"}`,
-            description: `Atendimento de Estética e Sobrancelhas\nServiço: ${service?.nome || "Personalizado"}\nCliente: ${client?.nome || ""}\nWhatsApp: ${client?.whatsapp || ""}\nValor: R$ ${atendimento.valor_cobrado.toFixed(2)}\nObservações: ${atendimento.observacoes || ""}`,
+            summary: `Estética: ${client?.nome || "Cliente"}`,
+            description: `Atendimento de Estética e Sobrancelhas\n\nCliente: ${client?.nome || ""}\nWhatsApp: ${client?.whatsapp || ""}\n\nServiços:\n${servicesText}\n\nValor: R$ ${atendimento.valor_cobrado.toFixed(2)}\nObservações: ${atendimento.observacoes || ""}`,
             startDateTime,
             endDateTime,
           }),
@@ -618,14 +626,22 @@ export const databaseService = {
           const endTime = new Date(startTime.getTime() + (nextDuracao || 30) * 60 * 1000);
           const endDateTime = endTime.toISOString();
 
+          const nextServicosDetalhes = atendimento.servicos_detalhes ?? currentApp?.servicos_detalhes;
+          let servicesText = "";
+          if (nextServicosDetalhes && Array.isArray(nextServicosDetalhes) && nextServicosDetalhes.length > 0) {
+            servicesText = nextServicosDetalhes.map(s => `• ${s.nome}`).join("\n");
+          } else {
+            servicesText = `• ${service?.nome || "Atendimento"}`;
+          }
+
           await fetch("/api/calendar/event/update", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               userId: professionalId,
               eventId: googleEventId,
-              summary: `Estética: ${client?.nome || "Cliente"} - ${service?.nome || "Atendimento"}`,
-              description: `Atendimento de Estética e Sobrancelhas\nServiço: ${service?.nome || ""}\nCliente: ${client?.nome || ""}\nWhatsApp: ${client?.whatsapp || ""}\nObservações: ${(atendimento.observacoes ?? currentApp.observacoes) || ""}\nStatus: ${nextStatus}`,
+              summary: `Estética: ${client?.nome || "Cliente"}`,
+              description: `Atendimento de Estética e Sobrancelhas\n\nCliente: ${client?.nome || ""}\nWhatsApp: ${client?.whatsapp || ""}\n\nServiços:\n${servicesText}\n\nObservações: ${(atendimento.observacoes ?? currentApp.observacoes) || ""}\nStatus: ${nextStatus}`,
               startDateTime,
               endDateTime
             })
@@ -658,13 +674,21 @@ export const databaseService = {
           const endTime = new Date(startTime.getTime() + nextDuracao * 60 * 1000);
           const endDateTime = endTime.toISOString();
 
+          const nextServicosDetalhes = atendimento.servicos_detalhes ?? currentApp?.servicos_detalhes;
+          let servicesText = "";
+          if (nextServicosDetalhes && Array.isArray(nextServicosDetalhes) && nextServicosDetalhes.length > 0) {
+            servicesText = nextServicosDetalhes.map(s => `• ${s.nome}`).join("\n");
+          } else {
+            servicesText = `• ${service?.nome || "Atendimento"}`;
+          }
+
           const syncResponse = await fetch("/api/calendar/event/create", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               userId: professionalId,
-              summary: `Estética: ${client?.nome || "Cliente"} - ${service?.nome || "Atendimento"}`,
-              description: `Atendimento de Estética e Sobrancelhas\nServiço: ${service?.nome || ""}\nCliente: ${client?.nome || ""}\nWhatsApp: ${client?.whatsapp || ""}\nValor: R$ ${nextValor.toFixed(2)}`,
+              summary: `Estética: ${client?.nome || "Cliente"}`,
+              description: `Atendimento de Estética e Sobrancelhas\n\nCliente: ${client?.nome || ""}\nWhatsApp: ${client?.whatsapp || ""}\n\nServiços:\n${servicesText}\n\nValor: R$ ${nextValor.toFixed(2)}`,
               startDateTime,
               endDateTime
             })

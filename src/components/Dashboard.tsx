@@ -18,12 +18,19 @@ import {
   Clock, AlertTriangle, Check, X, AlertCircle, ArrowRight, User, Briefcase
 } from "lucide-react";
 
-export const Dashboard: React.FC = () => {
+export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ onNavigate }) => {
   const { user } = useAuth();
   const [atendimentos, setAtendimentos] = useState<Atendimento[]>([]);
   const [despesas, setDespesas] = useState<Despesa[]>([]);
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [servicos, setServicos] = useState<Servico[]>([]);
+
+  const getServicosNomes = (at: Atendimento) => {
+    if (at.servicos_detalhes && Array.isArray(at.servicos_detalhes) && at.servicos_detalhes.length > 0) {
+      return at.servicos_detalhes.map(s => s.nome).join(", ");
+    }
+    return at.servico?.nome || "Serviço Personalizado";
+  };
   const [systemUsers, setSystemUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -214,8 +221,11 @@ export const Dashboard: React.FC = () => {
 
     try {
       const valorRecebido = finalizeValorCobrado - finalizeDesconto + finalizeAcrescimos;
-      const custo = finalizeApt.servico?.custo || 0;
+      const custo = finalizeApt.custo || finalizeApt.servico?.custo || 0;
       const lucroLiquido = valorRecebido - custo;
+      const produtos = finalizeApt.produtos_utilizados && finalizeApt.produtos_utilizados.length > 0
+        ? finalizeApt.produtos_utilizados
+        : (finalizeApt.servico?.produtos || []);
 
       await databaseService.updateAtendimento(finalizeApt.id, {
         status: "Concluído",
@@ -227,7 +237,7 @@ export const Dashboard: React.FC = () => {
         forma_pagamento: finalizeFormaPagamento,
         data_pagamento: getTodayDateStr(),
         custo: custo,
-        produtos_utilizados: finalizeApt.servico?.produtos || [],
+        produtos_utilizados: produtos,
         lucro_liquido: lucroLiquido
       }, user.id);
 
@@ -536,8 +546,26 @@ export const Dashboard: React.FC = () => {
           <p className="text-sm text-stone-500 mt-0.5">Veja a saúde financeira e o desempenho da sua clínica estética.</p>
         </div>
 
-        {/* Live Clock Card */}
-        <div className="bg-stone-900 text-stone-100 px-5 py-3 rounded-2xl border border-stone-800 shadow-sm flex items-center justify-between gap-6 min-w-[280px]">
+        {/* Actions & Clock */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+          {/* Standout "+ Novo Agendamento" Button */}
+          <button
+            onClick={() => {
+              if (onNavigate) {
+                onNavigate("agenda");
+                setTimeout(() => {
+                  window.dispatchEvent(new CustomEvent("pkm-open-new-appointment"));
+                }, 150);
+              }
+            }}
+            className="flex items-center justify-center gap-2 px-5 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl text-xs font-bold shadow-md hover:shadow-lg transition-all cursor-pointer transform hover:-translate-y-0.5 active:translate-y-0"
+          >
+            <Calendar className="w-4 h-4" />
+            + Novo Agendamento
+          </button>
+
+          {/* Live Clock Card */}
+          <div className="bg-stone-900 text-stone-100 px-5 py-3 rounded-2xl border border-stone-800 shadow-sm flex items-center justify-between gap-6 min-w-[280px]">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-stone-800 rounded-xl text-rose-500">
               <Clock className="w-5 h-5 animate-pulse" />
@@ -554,6 +582,7 @@ export const Dashboard: React.FC = () => {
               {formattedTime}
             </span>
           </div>
+        </div>
         </div>
       </div>
 
@@ -709,31 +738,68 @@ export const Dashboard: React.FC = () => {
                 <div 
                   key={at.id}
                   onClick={() => setSelectedAptDetails(at)}
-                  className="flex items-center justify-between p-3 rounded-xl border border-stone-100 hover:border-rose-100 hover:bg-rose-50/10 cursor-pointer transition-all"
+                  className="p-3 rounded-xl border border-stone-100 hover:border-rose-100 hover:bg-rose-50/10 cursor-pointer transition-all flex flex-col gap-2.5"
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="text-center min-w-[50px] p-2 bg-stone-50 rounded-lg border border-stone-100 font-mono text-stone-800">
-                      <span className="text-xs font-bold block">{at.hora}</span>
-                      <span className="text-[8px] font-semibold text-stone-400 uppercase">Tempo</span>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="text-center min-w-[50px] p-2 bg-stone-50 rounded-lg border border-stone-100 font-mono text-stone-800">
+                        <span className="text-xs font-bold block">{at.hora}</span>
+                        <span className="text-[8px] font-semibold text-stone-400 uppercase">Tempo</span>
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-bold text-stone-850 truncate max-w-[150px]">{at.cliente?.nome || "Cliente"}</h4>
+                        <p className="text-[10px] text-stone-450 mt-0.5 flex items-center gap-1">
+                          <Briefcase className="w-3 h-3 text-rose-500/70" /> {getServicosNomes(at)}
+                        </p>
+                        <p className="text-[9px] text-stone-400 mt-0.5">
+                          Profissional: {getProfessionalName(at.user_id)}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <h4 className="text-xs font-bold text-stone-850 truncate max-w-[150px]">{at.cliente?.nome || "Cliente"}</h4>
-                      <p className="text-[10px] text-stone-450 mt-0.5 flex items-center gap-1">
-                        <Briefcase className="w-3 h-3 text-rose-500/70" /> {at.servico?.nome || "Personalizado"}
-                      </p>
-                      <p className="text-[9px] text-stone-400 mt-0.5">
-                        Profissional: {getProfessionalName(at.user_id)}
-                      </p>
+
+                    <div className="text-right flex flex-col justify-center items-end">
+                      <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full">
+                        {getRelativeTimeString(at.data, at.hora)}
+                      </span>
+                      <span className="text-[8px] text-stone-400 font-mono mt-1 flex items-center gap-0.5">
+                        Ver detalhes <ArrowRight className="w-2 h-2" />
+                      </span>
                     </div>
                   </div>
 
-                  <div className="text-right flex flex-col justify-center items-end">
-                    <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full">
-                      {getRelativeTimeString(at.data, at.hora)}
-                    </span>
-                    <span className="text-[8px] text-stone-400 font-mono mt-1 flex items-center gap-0.5">
-                      Ver detalhes <ArrowRight className="w-2 h-2" />
-                    </span>
+                  {/* QUICK ACTIONS BAR */}
+                  <div className="flex gap-1.5 pt-2 border-t border-stone-50">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setFinalizeApt(at);
+                        setFinalizeValorCobrado(at.valor_cobrado || (at.servico?.valor || 0));
+                        setFinalizeDesconto(at.desconto || 0);
+                        setFinalizeAcrescimos(at.acrescimos || 0);
+                        setFinalizeFormaPagamento(at.forma_pagamento || "Pix");
+                      }}
+                      className="flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100/80 px-2 py-1 rounded-lg border border-emerald-100 transition-colors cursor-pointer"
+                    >
+                      <Check className="w-3 h-3" /> Concluir
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleOpenReschedule(at);
+                      }}
+                      className="flex items-center gap-1 text-[10px] font-bold text-stone-700 bg-stone-50 hover:bg-stone-100 px-2 py-1 rounded-lg border border-stone-250 transition-colors cursor-pointer"
+                    >
+                      <Calendar className="w-3 h-3" /> Reagendar
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleOpenCancel(at);
+                      }}
+                      className="flex items-center gap-1 text-[10px] font-bold text-red-700 bg-red-50 hover:bg-red-100/80 px-2 py-1 rounded-lg border border-red-100 transition-colors cursor-pointer"
+                    >
+                      <X className="w-3 h-3" /> Cancelar
+                    </button>
                   </div>
                 </div>
               ))}
@@ -770,7 +836,7 @@ export const Dashboard: React.FC = () => {
                     <div>
                       <h4 className="text-xs font-bold text-stone-850 truncate max-w-[150px]">{at.cliente?.nome || "Cliente"}</h4>
                       <p className="text-[10px] text-stone-450 mt-0.5 flex items-center gap-1">
-                        <Briefcase className="w-3 h-3 text-stone-450" /> {at.servico?.nome || "Personalizado"}
+                        <Briefcase className="w-3 h-3 text-stone-450" /> {getServicosNomes(at)}
                       </p>
                     </div>
                   </div>
