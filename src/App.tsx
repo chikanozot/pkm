@@ -223,7 +223,7 @@ const Layout: React.FC = () => {
       {/* ==========================================
           MAIN PORTAL VIEW CONTAINER
           ========================================== */}
-      <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-x-hidden">
+      <main className="flex-1 p-4 sm:p-6 lg:p-8 pb-24 md:pb-8 overflow-x-hidden">
         <AnimatePresence mode="wait">
           <motion.div
             key={activeTab}

@@ -136,8 +136,22 @@ export async function getUserGoogleConnection(userId: string) {
         access_token: refreshData.access_token,
         expiry_date: newExpiry,
       };
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to refresh Google token:", err);
+      // If it is a terminal OAuth error (e.g. invalid_client or invalid_grant),
+      // we should delete the connection in Supabase so the user can re-authenticate.
+      const errMsg = err?.message || String(err);
+      if (
+        errMsg.includes("invalid_client") ||
+        errMsg.includes("invalid_grant") ||
+        errMsg.includes("unauthorized_client")
+      ) {
+        console.warn(`Terminal OAuth error detected. Deleting connection for user ${userId} so they can reconnect.`);
+        await supabase
+          .from("google_connections")
+          .delete()
+          .eq("user_id", userId);
+      }
       return null;
     }
   }

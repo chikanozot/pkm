@@ -19,6 +19,7 @@ export const ServicosScreen: React.FC = () => {
   const [editId, setEditId] = useState<string | null>(null);
   const [nome, setNome] = useState("");
   const [valor, setValor] = useState("");
+  const [custo, setCusto] = useState("");
   const [duracao, setDuracao] = useState("");
   const [descricao, setDescricao] = useState("");
   const [produtos, setProdutos] = useState<string[]>([]);
@@ -46,6 +47,7 @@ export const ServicosScreen: React.FC = () => {
       setEditId(srv.id);
       setNome(srv.nome);
       setValor(srv.valor.toString());
+      setCusto(srv.custo !== undefined ? srv.custo.toString() : "");
       setDuracao(srv.duracao.toString());
       setDescricao(srv.descricao || "");
       setProdutos(srv.produtos || []);
@@ -53,6 +55,7 @@ export const ServicosScreen: React.FC = () => {
       setEditId(null);
       setNome("");
       setValor("");
+      setCusto("");
       setDuracao("");
       setDescricao("");
       setProdutos([]);
@@ -85,6 +88,7 @@ export const ServicosScreen: React.FC = () => {
       user_id: user.id,
       nome,
       valor: parseFloat(valor),
+      custo: custo ? parseFloat(custo) : 0,
       duracao: parseInt(duracao),
       descricao,
       produtos
@@ -173,9 +177,16 @@ export const ServicosScreen: React.FC = () => {
               <div className="space-y-3">
                 <div className="flex justify-between items-start gap-2">
                   <h3 className="font-serif text-lg font-semibold text-stone-900 leading-tight">{srv.nome}</h3>
-                  <span className="text-lg font-bold text-rose-600 shrink-0">
-                    R$ {srv.valor.toFixed(2)}
-                  </span>
+                  <div className="text-right shrink-0">
+                    <span className="text-lg font-bold text-rose-600 block">
+                      R$ {srv.valor.toFixed(2)}
+                    </span>
+                    {srv.custo !== undefined && srv.custo > 0 && (
+                      <span className="text-[10px] text-stone-400 block font-semibold">
+                        Custo: R$ {srv.custo.toFixed(2)}
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 <p className="text-xs text-stone-500 line-clamp-3 leading-relaxed">
@@ -266,17 +277,31 @@ export const ServicosScreen: React.FC = () => {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-stone-700 tracking-wide uppercase mb-1 flex items-center gap-1">
-                    <Clock className="w-3.5 h-3.5" /> Tempo Médio (min) *
+                    <DollarSign className="w-3 h-3" /> Custo do Serviço
                   </label>
                   <input
                     type="number"
-                    required
-                    value={duracao}
-                    onChange={(e) => setDuracao(e.target.value)}
+                    step="0.01"
+                    value={custo}
+                    onChange={(e) => setCusto(e.target.value)}
                     className="block w-full rounded-xl border border-stone-200 px-3 py-2 text-sm placeholder-stone-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500 transition-all"
-                    placeholder="Ex: 45"
+                    placeholder="Ex: 10.00"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 tracking-wide uppercase mb-1 flex items-center gap-1">
+                  <Clock className="w-3.5 h-3.5" /> Tempo Médio (minutos) *
+                </label>
+                <input
+                  type="number"
+                  required
+                  value={duracao}
+                  onChange={(e) => setDuracao(e.target.value)}
+                  className="block w-full rounded-xl border border-stone-200 px-3 py-2 text-sm placeholder-stone-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500 transition-all"
+                  placeholder="Ex: 45"
+                />
               </div>
 
               <div>

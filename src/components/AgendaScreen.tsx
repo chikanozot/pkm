@@ -49,6 +49,7 @@ export const AgendaScreen: React.FC = () => {
   const [acrescimos, setAcrescimos] = useState(0);
   const [custo, setCusto] = useState(0);
   const [produtosUtilizados, setProdutosUtilizados] = useState<string[]>([]);
+  const [salvarValor, setSalvarValor] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -94,6 +95,7 @@ export const AgendaScreen: React.FC = () => {
       setObservacoes(at.observacoes || "");
       setStatus(at.status);
       setValorCobrado(at.valor_cobrado);
+      setSalvarValor(at.valor_cobrado > 0);
       setFormaPagamento(at.forma_pagamento);
       setPago(at.pago);
       setFiado(at.fiado);
@@ -115,6 +117,7 @@ export const AgendaScreen: React.FC = () => {
       setObservacoes("");
       setStatus("Agendado");
       setValorCobrado(firstService?.valor || 0);
+      setSalvarValor(false);
       setFormaPagamento("Pix");
       setPago(false);
       setFiado(false);
@@ -138,8 +141,15 @@ export const AgendaScreen: React.FC = () => {
     e.preventDefault();
     if (!user) return;
 
-    // Auto-calculate profit
-    const netProfit = (valorCobrado - desconto + acrescimos) - custo;
+    // Fetch typical service details
+    const matchedService = servicos.find(s => s.id === servicoId);
+    const finalCusto = matchedService?.custo || 0;
+    const finalProdutos = matchedService?.produtos || [];
+
+    // Check if saving the amount is checked
+    const finalValorCobrado = salvarValor ? valorCobrado : 0;
+    const finalValorRecebido = salvarValor ? (pago ? (valorCobrado - desconto + acrescimos) : valorRecebido) : 0;
+    const netProfit = finalValorRecebido - finalCusto;
 
     const payload: Omit<Atendimento, "id" | "created_at"> = {
       user_id: user.id,
@@ -150,17 +160,17 @@ export const AgendaScreen: React.FC = () => {
       duracao,
       observacoes,
       status,
-      valor_cobrado: valorCobrado,
+      valor_cobrado: finalValorCobrado,
       forma_pagamento: formaPagamento,
       data_pagamento: pago ? dataPagamento : undefined,
       pago,
       fiado,
       data_prevista_recebimento: fiado ? dataPrevistaRecebimento : undefined,
-      valor_recebido: pago ? (valorCobrado - desconto + acrescimos) : valorRecebido,
-      desconto,
-      acrescimos,
-      custo,
-      produtos_utilizados: produtosUtilizados,
+      valor_recebido: finalValorRecebido,
+      desconto: salvarValor ? desconto : 0,
+      acrescimos: salvarValor ? acrescimos : 0,
+      custo: finalCusto,
+      produtos_utilizados: finalProdutos,
       lucro_liquido: netProfit,
     };
 
@@ -193,19 +203,19 @@ export const AgendaScreen: React.FC = () => {
   // Conclude Appointment Modal Trigger
   const handleOpenCompleteModal = (at: Atendimento) => {
     setSelectedAppointment(at);
-    setValorCobrado(at.valor_cobrado);
+    setValorCobrado(at.valor_cobrado || (at.servico?.valor || 0)); // Fallback to service base value if saved as 0
     setFormaPagamento(at.forma_pagamento || "Pix");
     setPago(true);
     setFiado(false);
     setDataPagamento(new Date().toISOString().substring(0, 10));
     setDataPrevistaRecebimento("");
-    setValorRecebido(at.valor_cobrado);
+    setValorRecebido(at.valor_cobrado || (at.servico?.valor || 0));
     setDesconto(0);
     setAcrescimos(0);
     
     // Autofill cost estimates from typical service
     const matchedService = servicos.find(s => s.id === at.servico_id);
-    setCusto(matchedService?.produtos?.length ? matchedService.produtos.length * 3.5 : 5.0); // Simple fallback cost multiplier
+    setCusto(matchedService?.custo || 0);
     setProdutosUtilizados(matchedService?.produtos || []);
     
     setIsCompleteModalOpen(true);
@@ -215,8 +225,9 @@ export const AgendaScreen: React.FC = () => {
     e.preventDefault();
     if (!user || !selectedAppointment) return;
 
-    // Calculate final profit
-    const netProfit = (valorCobrado - desconto + acrescimos) - custo;
+    // Calculate final profit: Profit = Received - Cost
+    const finalValorRecebido = pago ? (valorCobrado - desconto + acrescimos) : 0;
+    const netProfit = finalValorRecebido - custo;
 
     const updates: Partial<Atendimento> = {
       status: "Concluído",
@@ -226,7 +237,7 @@ export const AgendaScreen: React.FC = () => {
       fiado: fiado,
       data_pagamento: pago ? dataPagamento : undefined,
       data_prevista_recebimento: fiado ? dataPrevistaRecebimento : undefined,
-      valor_recebido: pago ? (valorCobrado - desconto + acrescimos) : (fiado ? 0 : valorRecebido),
+      valor_recebido: finalValorRecebido,
       desconto,
       acrescimos,
       custo,
@@ -741,6 +752,15 @@ export const AgendaScreen: React.FC = () => {
                         onChange={(e) => setValorCobrado(parseFloat(e.target.value))}
                         className="block w-full rounded-xl border border-stone-200 px-3 py-2 text-sm focus:border-rose-500 focus:outline-none"
                       />
+                      <label className="flex items-center gap-2 mt-2 text-xs font-semibold text-stone-600 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={salvarValor}
+                          onChange={(e) => setSalvarValor(e.target.checked)}
+                          className="rounded border-stone-300 text-rose-600 focus:ring-rose-500 w-4 h-4"
+                        />
+                        <span>Registrar valor na agenda</span>
+                      </label>
                     </div>
                   </div>
 

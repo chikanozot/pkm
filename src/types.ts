@@ -24,6 +24,7 @@ export interface Servico {
   user_id: string;
   nome: string;
   valor: number;
+  custo?: number; // average cost of insumos
   duracao: number; // in minutes
   descricao: string;
   produtos: string[];
@@ -77,6 +78,7 @@ export interface Despesa {
   data: string; // YYYY-MM-DD
   forma_pagamento: string;
   observacoes: string;
+  atendimento_id?: string | null; // linked to appointment
   created_at: string;
 }
 

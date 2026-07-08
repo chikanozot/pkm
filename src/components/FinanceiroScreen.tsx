@@ -146,6 +146,12 @@ export const FinanceiroScreen: React.FC = () => {
   const totalReceitasFiltradas = filteredRevenues.reduce((acc, r) => acc + r.valor_recebido, 0);
   const saldoPeriodo = totalReceitasFiltradas - totalDespesasFiltradas;
 
+  // Modern metrics requested by user:
+  const totalRecebido = totalReceitasFiltradas;
+  const totalGastoInsumos = filteredRevenues.reduce((acc, r) => acc + (r.custo || 0), 0);
+  const lucroObtido = totalRecebido - totalGastoInsumos;
+  const margemLucro = totalRecebido > 0 ? (lucroObtido / totalRecebido) * 100 : 0;
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -244,6 +250,36 @@ export const FinanceiroScreen: React.FC = () => {
           </div>
           <div className={`p-3 rounded-xl border ${saldoPeriodo >= 0 ? "bg-emerald-50/50 text-emerald-600 border-emerald-100" : "bg-red-50/50 text-red-600 border-red-100"}`}>
             <DollarSign className="w-5 h-5" />
+          </div>
+        </div>
+      </div>
+
+      {/* Indicadores de Rentabilidade dos Serviços */}
+      <div className="space-y-3 bg-white p-5 rounded-2xl border border-stone-200/60 shadow-sm">
+        <h3 className="font-serif text-sm font-semibold text-stone-800">Rentabilidade dos Serviços (Período)</h3>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-stone-50 p-3.5 rounded-xl border border-stone-100">
+            <span className="text-[9px] font-bold uppercase text-stone-400 tracking-wider block">Total Recebido</span>
+            <span className="text-lg font-bold text-emerald-600 block mt-1">R$ {totalRecebido.toFixed(2)}</span>
+            <span className="text-[9px] text-stone-450 font-medium">Faturamento bruto</span>
+          </div>
+
+          <div className="bg-stone-50 p-3.5 rounded-xl border border-stone-100">
+            <span className="text-[9px] font-bold uppercase text-stone-400 tracking-wider block">Gasto com Insumos</span>
+            <span className="text-lg font-bold text-red-600 block mt-1">R$ {totalGastoInsumos.toFixed(2)}</span>
+            <span className="text-[9px] text-stone-450 font-medium">Custos operacionais directos</span>
+          </div>
+
+          <div className="bg-stone-50 p-3.5 rounded-xl border border-stone-100">
+            <span className="text-[9px] font-bold uppercase text-stone-400 tracking-wider block">Lucro Obtido</span>
+            <span className="text-lg font-bold text-stone-900 block mt-1">R$ {lucroObtido.toFixed(2)}</span>
+            <span className="text-[9px] text-stone-450 font-medium">Resultado líquido direto</span>
+          </div>
+
+          <div className="bg-stone-50 p-3.5 rounded-xl border border-stone-100">
+            <span className="text-[9px] font-bold uppercase text-stone-400 tracking-wider block">Margem de Lucro</span>
+            <span className="text-lg font-bold text-rose-600 block mt-1">{margemLucro.toFixed(1)}%</span>
+            <span className="text-[9px] text-stone-450 font-medium">Eficiência de serviços</span>
           </div>
         </div>
       </div>

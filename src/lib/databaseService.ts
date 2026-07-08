@@ -221,6 +221,7 @@ create table public.servicos (
     user_id uuid references public.users(id) on delete cascade not null,
     nome text not null,
     valor numeric(10,2) not null,
+    custo numeric(10,2) default 0.00 not null,
     duracao integer not null, -- em minutos
     descricao text,
     produtos text[] default '{}'::text[],
@@ -281,6 +282,7 @@ create table public.despesas (
     data date not null,
     forma_pagamento text not null,
     observacoes text,
+    atendimento_id uuid references public.atendimentos(id) on delete cascade,
     created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
@@ -403,27 +405,86 @@ export const databaseService = {
 
   async insertServico(servico: Omit<Servico, "id" | "created_at">): Promise<Servico> {
     checkSupabase();
-    const { data, error } = await supabase
-      .from("servicos")
-      .insert([servico])
-      .select()
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from("servicos")
+        .insert([servico])
+        .select()
+        .single();
 
-    if (error) throw error;
-    return data;
+      if (error) {
+        // If the column 'custo' does not exist in the database, retry without it
+        if (error.code === "42703" || (error.message && error.message.includes("custo"))) {
+          console.warn("Column 'custo' does not exist in 'servicos' table. Retrying insert without 'custo'.");
+          const { custo, ...servicoWithoutCusto } = servico as any;
+          const { data: retryData, error: retryError } = await supabase
+            .from("servicos")
+            .insert([servicoWithoutCusto])
+            .select()
+            .single();
+          if (retryError) throw retryError;
+          return retryData;
+        }
+        throw error;
+      }
+      return data;
+    } catch (err: any) {
+      if (err.code === "42703" || (err.message && err.message.includes("custo"))) {
+        console.warn("Column 'custo' does not exist in 'servicos' table. Retrying insert without 'custo' via catch.");
+        const { custo, ...servicoWithoutCusto } = servico as any;
+        const { data: retryData, error: retryError } = await supabase
+          .from("servicos")
+          .insert([servicoWithoutCusto])
+          .select()
+          .single();
+        if (retryError) throw retryError;
+        return retryData;
+      }
+      throw err;
+    }
   },
 
   async updateServico(id: string, servico: Partial<Servico>): Promise<Servico> {
     checkSupabase();
-    const { data, error } = await supabase
-      .from("servicos")
-      .update(servico)
-      .eq("id", id)
-      .select()
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from("servicos")
+        .update(servico)
+        .eq("id", id)
+        .select()
+        .single();
 
-    if (error) throw error;
-    return data;
+      if (error) {
+        if (error.code === "42703" || (error.message && error.message.includes("custo"))) {
+          console.warn("Column 'custo' does not exist in 'servicos' table. Retrying update without 'custo'.");
+          const { custo, ...servicoWithoutCusto } = servico as any;
+          const { data: retryData, error: retryError } = await supabase
+            .from("servicos")
+            .update(servicoWithoutCusto)
+            .eq("id", id)
+            .select()
+            .single();
+          if (retryError) throw retryError;
+          return retryData;
+        }
+        throw error;
+      }
+      return data;
+    } catch (err: any) {
+      if (err.code === "42703" || (err.message && err.message.includes("custo"))) {
+        console.warn("Column 'custo' does not exist in 'servicos' table. Retrying update without 'custo' via catch.");
+        const { custo, ...servicoWithoutCusto } = servico as any;
+        const { data: retryData, error: retryError } = await supabase
+          .from("servicos")
+          .update(servicoWithoutCusto)
+          .eq("id", id)
+          .select()
+          .single();
+        if (retryError) throw retryError;
+        return retryData;
+      }
+      throw err;
+    }
   },
 
   async deleteServico(id: string): Promise<boolean> {
@@ -511,6 +572,11 @@ export const databaseService = {
       .single();
 
     if (error) throw error;
+    try {
+      await this.syncAutomaticExpense(data.id, data.user_id, data.cliente_id, data.custo, data.data, data.status, data.forma_pagamento);
+    } catch (e) {
+      console.error("Error syncing automatic expense for inserted appointment:", e);
+    }
     return data;
   },
 
@@ -626,7 +692,110 @@ export const databaseService = {
       .single();
 
     if (error) throw error;
+    try {
+      await this.syncAutomaticExpense(data.id, data.user_id, data.cliente_id, data.custo, data.data, data.status, data.forma_pagamento);
+    } catch (e) {
+      console.error("Error syncing automatic expense for updated appointment:", e);
+    }
     return data;
+  },
+
+  async syncAutomaticExpense(appointmentId: string, userId: string, clientId: string, custo: number, date: string, status: string, formaPagamento: string = "Pix"): Promise<void> {
+    checkSupabase();
+    try {
+      if (status !== "Concluído" || custo <= 0) {
+        // If the appointment is not completed or has no cost, check if there's an existing automatic expense to delete
+        const { data: existing, error: selectErr } = await supabase.from("despesas").select("id").eq("atendimento_id", appointmentId);
+        if (selectErr) {
+          if (selectErr.code === "42703" || (selectErr.message && selectErr.message.includes("atendimento_id"))) {
+            console.warn("Column 'atendimento_id' does not exist in 'despesas' table. Skipping automatic expense deletion.");
+            return;
+          }
+          throw selectErr;
+        }
+        if (existing && existing.length > 0) {
+          for (const exp of existing) {
+            await supabase.from("despesas").delete().eq("id", exp.id);
+          }
+        }
+        return;
+      }
+
+      // 1. Fetch client name
+      let clientNome = "Cliente";
+      try {
+        const { data: client } = await supabase.from("clientes").select("nome").eq("id", clientId).single();
+        if (client) {
+          clientNome = client.nome;
+        }
+      } catch (e) {
+        console.error("Error fetching client name for automatic expense:", e);
+      }
+
+      // 2. Check if expense already exists for this appointment
+      const { data: existing, error: selectErr } = await supabase.from("despesas").select("id").eq("atendimento_id", appointmentId);
+      if (selectErr) {
+        if (selectErr.code === "42703" || (selectErr.message && selectErr.message.includes("atendimento_id"))) {
+          console.warn("Column 'atendimento_id' does not exist in 'despesas' table. Retrying sync as standard expense (without link).");
+          // Just insert a new expense without link if we don't have one today
+          const despesaPayload = {
+            user_id: userId,
+            categoria: "Insumos de atendimento",
+            descricao: `Insumos utilizados no atendimento de ${clientNome}`,
+            valor: custo,
+            data: date,
+            forma_pagamento: formaPagamento || "Pix",
+            observacoes: "Gerado automaticamente ao finalizar atendimento (sem link)."
+          };
+          await supabase.from("despesas").insert([despesaPayload]);
+          return;
+        }
+        throw selectErr;
+      }
+      
+      const despesaPayload = {
+        user_id: userId,
+        categoria: "Insumos de atendimento",
+        descricao: `Insumos utilizados no atendimento de ${clientNome}`,
+        valor: custo,
+        data: date,
+        forma_pagamento: formaPagamento || "Pix",
+        observacoes: "Gerado automaticamente ao finalizar atendimento.",
+        atendimento_id: appointmentId
+      };
+
+      if (existing && existing.length > 0) {
+        // Update existing expense
+        await supabase.from("despesas").update(despesaPayload).eq("atendimento_id", appointmentId);
+      } else {
+        // Insert new expense
+        await supabase.from("despesas").insert([despesaPayload]);
+      }
+    } catch (err: any) {
+      if (err.code === "42703" || (err.message && err.message.includes("atendimento_id"))) {
+        console.warn("Caught 'atendimento_id' column error in catch block. Inserting without 'atendimento_id'.");
+        try {
+          let clientNome = "Cliente";
+          const { data: client } = await supabase.from("clientes").select("nome").eq("id", clientId).single();
+          if (client) clientNome = client.nome;
+          
+          const despesaPayload = {
+            user_id: userId,
+            categoria: "Insumos de atendimento",
+            descricao: `Insumos utilizados no atendimento de ${clientNome}`,
+            valor: custo,
+            data: date,
+            forma_pagamento: formaPagamento || "Pix",
+            observacoes: "Gerado automaticamente ao finalizar atendimento (sem link)."
+          };
+          await supabase.from("despesas").insert([despesaPayload]);
+        } catch (innerErr) {
+          console.error("Failed to insert unlinked automatic expense:", innerErr);
+        }
+      } else {
+        console.error("Error in syncAutomaticExpense:", err);
+      }
+    }
   },
 
   async deleteAtendimento(id: string, professionalId: string): Promise<boolean> {
