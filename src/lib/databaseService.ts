@@ -273,6 +273,30 @@ create policy "Controle de acesso para atendimentos"
 on public.atendimentos for all using (public.is_master_user() or public.current_app_user_id() = user_id);
 
 
+-- 11.1 Tabela de Atendimento Serviços (Múltiplos Serviços por Atendimento)
+create table public.atendimento_servicos (
+    id uuid default gen_random_uuid() primary key,
+    atendimento_id uuid references public.atendimentos(id) on delete cascade not null,
+    servico_id uuid references public.servicos(id) on delete cascade not null,
+    valor_aplicado numeric(10,2) not null,
+    custo_aplicado numeric(10,2) not null,
+    duracao_aplicada integer not null,
+    created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+alter table public.atendimento_servicos enable row level security;
+
+create policy "Controle de acesso para atendimento_servicos"
+on public.atendimento_servicos for all using (
+    public.is_master_user() or 
+    exists (
+        select 1 from public.atendimentos a 
+        where a.id = atendimento_servicos.atendimento_id 
+          and (a.user_id = public.current_app_user_id() or public.is_master_user())
+    )
+);
+
+
 -- 12. Tabela de Despesas Gerais
 create table public.despesas (
     id uuid default gen_random_uuid() primary key,
@@ -507,7 +531,8 @@ export const databaseService = {
     let query = supabase.from("atendimentos").select(`
         *,
         cliente:clientes(*),
-        servico:servicos(*)
+        servico:servicos(*),
+        atendimento_servicos:atendimento_servicos(*, servico:servicos(*))
       `);
     if (role !== "master") {
       query = query.eq("user_id", userId);
@@ -517,7 +542,22 @@ export const databaseService = {
       .order("hora", { ascending: false });
 
     if (error) throw error;
-    return data || [];
+    
+    // Map data to ensure servicos_detalhes is fully synchronized from atendimento_servicos table
+    const mapped = (data || []).map((at: any) => {
+      if (at.atendimento_servicos && Array.isArray(at.atendimento_servicos) && at.atendimento_servicos.length > 0) {
+        at.servicos_detalhes = at.atendimento_servicos.map((as: any) => ({
+          servico_id: as.servico_id,
+          nome: as.servico?.nome || "Serviço",
+          valor: Number(as.valor_aplicado),
+          duracao: Number(as.duracao_aplicada),
+          custo: Number(as.custo_aplicado)
+        }));
+      }
+      return at as Atendimento;
+    });
+
+    return mapped;
   },
 
   async insertAtendimento(atendimento: Omit<Atendimento, "id" | "created_at">): Promise<Atendimento> {
@@ -580,6 +620,24 @@ export const databaseService = {
       .single();
 
     if (error) throw error;
+
+    // Insert associated services into the atendimento_servicos table if they exist
+    if (atendimento.servicos_detalhes && Array.isArray(atendimento.servicos_detalhes) && atendimento.servicos_detalhes.length > 0) {
+      const servicesToInsert = atendimento.servicos_detalhes.map(s => ({
+        atendimento_id: data.id,
+        servico_id: s.servico_id,
+        valor_aplicado: s.valor,
+        custo_aplicado: s.custo,
+        duracao_aplicada: s.duracao
+      }));
+      const { error: servicesError } = await supabase
+        .from("atendimento_servicos")
+        .insert(servicesToInsert);
+      if (servicesError) {
+        console.error("Error inserting into atendimento_servicos:", servicesError);
+      }
+    }
+
     try {
       await this.syncAutomaticExpense(data.id, data.user_id, data.cliente_id, data.custo, data.data, data.status, data.forma_pagamento);
     } catch (e) {
@@ -716,6 +774,36 @@ export const databaseService = {
       .single();
 
     if (error) throw error;
+
+    // Clear and update associated services in atendimento_servicos table if they were updated
+    if (atendimento.servicos_detalhes && Array.isArray(atendimento.servicos_detalhes)) {
+      // Clear existing first
+      const { error: deleteError } = await supabase
+        .from("atendimento_servicos")
+        .delete()
+        .eq("atendimento_id", id);
+      
+      if (deleteError) {
+        console.error("Error deleting from atendimento_servicos on update:", deleteError);
+      }
+
+      if (atendimento.servicos_detalhes.length > 0) {
+        const servicesToInsert = atendimento.servicos_detalhes.map(s => ({
+          atendimento_id: id,
+          servico_id: s.servico_id,
+          valor_aplicado: s.valor,
+          custo_aplicado: s.custo,
+          duracao_aplicada: s.duracao
+        }));
+        const { error: servicesError } = await supabase
+          .from("atendimento_servicos")
+          .insert(servicesToInsert);
+        if (servicesError) {
+          console.error("Error inserting into atendimento_servicos on update:", servicesError);
+        }
+      }
+    }
+
     try {
       await this.syncAutomaticExpense(data.id, data.user_id, data.cliente_id, data.custo, data.data, data.status, data.forma_pagamento);
     } catch (e) {
