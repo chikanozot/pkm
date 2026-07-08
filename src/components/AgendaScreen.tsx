@@ -56,7 +56,7 @@ export const AgendaScreen: React.FC = () => {
   const [acrescimos, setAcrescimos] = useState(0);
   const [custo, setCusto] = useState(0);
   const [produtosUtilizados, setProdutosUtilizados] = useState<string[]>([]);
-  const [salvarValor, setSalvarValor] = useState(true);
+  const [salvarValor, setSalvarValor] = useState(false);
 
   // Multiple Services State and Helpers
   const [selectedServices, setSelectedServices] = useState<Array<{
@@ -212,7 +212,7 @@ export const AgendaScreen: React.FC = () => {
       setObservacoes("");
       setStatus("Agendado");
       setValorCobrado(firstService?.valor || 0);
-      setSalvarValor(true);
+      setSalvarValor(false);
       setFormaPagamento("Pix");
       setPago(false);
       setFiado(false);
