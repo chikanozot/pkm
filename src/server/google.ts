@@ -279,3 +279,48 @@ export async function deleteGoogleCalendarEvent(accessToken: string, eventId: st
 
   return true;
 }
+
+// 8. Fetch Google Calendar events (supports list, paging, timeMin, and syncToken)
+export async function listGoogleCalendarEvents(
+  accessToken: string,
+  options: {
+    syncToken?: string;
+    timeMin?: string;
+    pageToken?: string;
+  } = {}
+) {
+  const url = new URL("https://www.googleapis.com/calendar/v3/calendars/primary/events");
+  
+  if (options.syncToken) {
+    url.searchParams.set("syncToken", options.syncToken);
+  } else {
+    if (options.timeMin) {
+      url.searchParams.set("timeMin", options.timeMin);
+    }
+    url.searchParams.set("singleEvents", "true");
+  }
+  
+  if (options.pageToken) {
+    url.searchParams.set("pageToken", options.pageToken);
+  }
+
+  const response = await fetch(url.toString(), {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (response.status === 410) {
+    throw new Error("SYNC_TOKEN_EXPIRED");
+  }
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Google Calendar List Events error: ${errText}`);
+  }
+
+  return response.json();
+}
+

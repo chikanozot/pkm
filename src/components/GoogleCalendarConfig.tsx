@@ -16,6 +16,13 @@ export const GoogleCalendarConfig: React.FC = () => {
   const [copied, setCopied] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
 
+  const [syncActive, setSyncActive] = useState(true);
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncingNow, setSyncingNow] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
+
   useEffect(() => {
     checkConnectionStatus();
   }, [user]);
@@ -47,11 +54,62 @@ export const GoogleCalendarConfig: React.FC = () => {
         const data = await res.json();
         setConnected(data.connected);
         setRemindersMinutes(data.remindersMinutes);
+        setSyncActive(data.syncActive !== false);
+        setLastSyncAt(data.lastSyncAt);
+        setSyncStatus(data.syncStatus);
+        setSyncError(data.syncError);
       }
     } catch (err) {
       console.error("Erro ao verificar status do Google", err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSyncActiveToggle = async (active: boolean) => {
+    if (!user) return;
+    setSyncActive(active);
+    try {
+      const res = await fetch("/api/auth/google/sync-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: user.id, syncActive: active }),
+      });
+      if (res.ok) {
+        setStatusMessage(active ? "Sincronização automática ativada." : "Sincronização automática desativada.");
+        setTimeout(() => setStatusMessage(""), 4000);
+      }
+    } catch (err) {
+      console.error("Erro ao salvar configuração de sincronização", err);
+    }
+  };
+
+  const handleManualSync = async () => {
+    if (!user) return;
+    setSyncingNow(true);
+    setSyncResult(null);
+    try {
+      const res = await fetch("/api/calendar/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: user.id }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          setSyncResult(`Sincronização concluída com sucesso! Importados: ${data.imported}, Atualizados: ${data.updated}, Cancelados: ${data.cancelled}`);
+          checkConnectionStatus();
+        } else {
+          setSyncResult(`Erro de sincronização: ${data.error || "Erro desconhecido"}`);
+        }
+      } else {
+        setSyncResult("Erro ao se comunicar com o servidor.");
+      }
+    } catch (err: any) {
+      console.error("Erro na sincronização manual", err);
+      setSyncResult(`Exceção: ${err.message || err}`);
+    } finally {
+      setSyncingNow(false);
     }
   };
 
@@ -221,6 +279,70 @@ export const GoogleCalendarConfig: React.FC = () => {
                 >
                   <Power className="w-3.5 h-3.5" /> Desconectar
                 </button>
+              </div>
+
+              {/* Bidirectional Sync Card */}
+              <div className="bg-stone-50 border border-stone-200/60 p-4 rounded-xl space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-stone-800 font-semibold text-sm">
+                    <RefreshCw className="w-4 h-4 text-stone-500" />
+                    <span>Sincronização Bidirecional Automática</span>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={syncActive}
+                      onChange={(e) => handleSyncActiveToggle(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-stone-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-stone-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-rose-500"></div>
+                    <span className="ml-2 text-xs font-medium text-stone-700">Ativa</span>
+                  </label>
+                </div>
+                
+                <p className="text-xs text-stone-500 leading-relaxed">
+                  Importa automaticamente novos atendimentos criados diretamente no Google Calendar e atualiza alterações e cancelamentos feitos em ambos os lados.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                  {/* Last Sync Details */}
+                  <div className="p-3 bg-white border border-stone-150 rounded-xl space-y-1.5">
+                    <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wide">Última Sincronização</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`inline-block w-2 h-2 rounded-full ${syncStatus === "success" ? "bg-emerald-500" : syncStatus === "error" ? "bg-red-500" : "bg-amber-400"}`}></span>
+                      <span className="text-xs font-semibold text-stone-700">
+                        {lastSyncAt ? new Date(lastSyncAt).toLocaleString("pt-BR") : "Nunca sincronizado"}
+                      </span>
+                    </div>
+                    {syncError && (
+                      <p className="text-[10px] text-red-500 font-medium break-words mt-1">
+                        Aviso: {syncError}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Manual trigger */}
+                  <div className="p-3 bg-white border border-stone-150 rounded-xl flex flex-col justify-between gap-2">
+                    <div>
+                      <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wide">Ações de Sincronismo</span>
+                      <p className="text-[11px] text-stone-500 mt-0.5">Forçar sincronização de dados instantaneamente.</p>
+                    </div>
+                    <button
+                      onClick={handleManualSync}
+                      disabled={syncingNow}
+                      className="w-full py-1.5 bg-stone-900 hover:bg-stone-800 disabled:bg-stone-350 text-white text-xs font-semibold rounded-lg shadow-sm transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${syncingNow ? "animate-spin" : ""}`} />
+                      {syncingNow ? "Sincronizando..." : "Sincronizar Agora"}
+                    </button>
+                  </div>
+                </div>
+
+                {syncResult && (
+                  <div className={`p-3 border rounded-xl text-xs font-medium leading-relaxed ${syncResult.includes("Erro") || syncResult.includes("Exceção") ? "bg-red-50 border-red-200 text-red-800" : "bg-emerald-50 border-emerald-150 text-emerald-800"}`}>
+                    {syncResult}
+                  </div>
+                )}
               </div>
 
               {/* Reminders config */}

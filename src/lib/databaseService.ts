@@ -263,6 +263,9 @@ create table public.atendimentos (
     lucro_liquido numeric(10,2) not null,
     
     google_event_id text,
+    google_calendar_id text,
+    google_last_sync timestamp with time zone,
+    google_sync_status text,
     servicos_detalhes jsonb default '[]'::jsonb not null,
     created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
@@ -325,6 +328,11 @@ create table public.google_connections (
     refresh_token text not null,
     expiry_date bigint not null,
     lembretes_minutos integer default 30 not null,
+    sync_active boolean default true not null,
+    last_sync_at timestamp with time zone,
+    sync_status text,
+    sync_error text,
+    next_sync_token text,
     created_at timestamp with time zone default timezone('utc'::text, now()) not null,
     constraint unique_user_google_connection unique(user_id)
 );
@@ -611,7 +619,10 @@ export const databaseService = {
     const { cliente, servico, servicos_detalhes, atendimento_servicos, ...pureAtendimento } = atendimento as any;
     const docToInsert = {
       ...pureAtendimento,
-      google_event_id: googleEventId
+      google_event_id: googleEventId,
+      google_calendar_id: googleEventId ? "primary" : null,
+      google_last_sync: googleEventId ? new Date().toISOString() : null,
+      google_sync_status: googleEventId ? "synced" : null
     };
 
     const { data, error } = await supabase
@@ -765,7 +776,10 @@ export const databaseService = {
     const { cliente, servico, servicos_detalhes, atendimento_servicos, ...pureAtendimento } = atendimento as any;
     const docToUpdate = {
       ...pureAtendimento,
-      google_event_id: googleEventId
+      google_event_id: googleEventId,
+      google_calendar_id: googleEventId ? "primary" : (atendimento.google_calendar_id || null),
+      google_last_sync: googleEventId ? new Date().toISOString() : null,
+      google_sync_status: googleEventId ? "synced" : null
     };
 
     const { data, error } = await supabase

@@ -62,6 +62,9 @@ export interface Atendimento {
   
   // Sync
   google_event_id?: string;
+  google_calendar_id?: string;
+  google_last_sync?: string;
+  google_sync_status?: string;
   servicos_detalhes?: Array<{
     servico_id: string;
     nome: string;
@@ -92,6 +95,10 @@ export interface Despesa {
 export interface GoogleConnection {
   connected: boolean;
   remindersMinutes: number;
+  syncActive?: boolean;
+  lastSyncAt?: string | null;
+  syncStatus?: string | null;
+  syncError?: string | null;
 }
 
 export interface UserSession {

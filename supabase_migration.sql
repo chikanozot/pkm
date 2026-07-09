@@ -81,3 +81,22 @@ WHERE NOT EXISTS (
     SELECT 1 FROM public.atendimento_servicos s WHERE s.atendimento_id = a.id
 ) AND a.servico_id IS NOT NULL
 ON CONFLICT DO NOTHING;
+
+-- =========================================================================
+-- MIGRATION FOR BIDIRECTIONAL GOOGLE CALENDAR SYNC
+-- =========================================================================
+
+-- 1. Adicionar colunas de controle de sincronização na tabela 'atendimentos'
+ALTER TABLE public.atendimentos 
+ADD COLUMN IF NOT EXISTS google_calendar_id TEXT,
+ADD COLUMN IF NOT EXISTS google_last_sync TIMESTAMP WITH TIME ZONE,
+ADD COLUMN IF NOT EXISTS google_sync_status TEXT;
+
+-- 2. Adicionar colunas de controle na tabela 'google_connections' para gerenciar o status global de sincronização
+ALTER TABLE public.google_connections
+ADD COLUMN IF NOT EXISTS sync_active BOOLEAN DEFAULT true NOT NULL,
+ADD COLUMN IF NOT EXISTS last_sync_at TIMESTAMP WITH TIME ZONE,
+ADD COLUMN IF NOT EXISTS sync_status TEXT,
+ADD COLUMN IF NOT EXISTS sync_error TEXT,
+ADD COLUMN IF NOT EXISTS next_sync_token TEXT;
+

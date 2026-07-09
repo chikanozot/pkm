@@ -14,6 +14,7 @@ import {
   createGoogleCalendarEvent,
   updateGoogleCalendarEvent,
   deleteGoogleCalendarEvent,
+  listGoogleCalendarEvents,
 } from "./src/server/google.js";
 
 // Load environment variables
@@ -296,6 +297,10 @@ app.get("/api/auth/google/status", async (req, res) => {
   res.json({
     connected: !!connection,
     remindersMinutes: connection?.lembretes_minutos ?? 30,
+    syncActive: connection?.sync_active ?? true,
+    lastSyncAt: connection?.last_sync_at ?? null,
+    syncStatus: connection?.sync_status ?? null,
+    syncError: connection?.sync_error ?? null,
   });
 });
 
@@ -454,6 +459,481 @@ app.post("/api/calendar/event/delete", async (req, res) => {
     res.status(500).json({ error: err.message || err });
   }
 });
+
+// 9. Update automatic sync settings
+app.post("/api/auth/google/sync-settings", async (req, res) => {
+  const { userId, syncActive } = req.body;
+  if (!userId || syncActive === undefined) {
+    return res.status(400).json({ error: "userId and syncActive are required" });
+  }
+
+  const supabase = getSupabase();
+  if (supabase) {
+    const { error } = await supabase
+      .from("google_connections")
+      .update({ sync_active: syncActive })
+      .eq("user_id", userId);
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+  } else {
+    const connection = demoGoogleConnections.get(userId);
+    if (connection) {
+      connection.sync_active = syncActive;
+      demoGoogleConnections.set(userId, connection);
+    }
+  }
+
+  res.json({ success: true, syncActive });
+});
+
+// 10. Manual Calendar Sync trigger
+app.post("/api/calendar/sync", async (req, res) => {
+  const { userId, forceFull } = req.body;
+  if (!userId) {
+    return res.status(400).json({ error: "userId is required" });
+  }
+
+  console.log(`[Manual Sync API] Requested calendar sync for user ${userId}. Force Full: ${forceFull === true}`);
+  const result = await syncUserCalendar(userId, forceFull === true);
+  res.json(result);
+});
+
+// ==========================================
+// Google Calendar Bidirectional Sync Engine
+// ==========================================
+
+async function updateConnectionSyncStatus(
+  userId: string,
+  status: "success" | "error",
+  errorMsg: string | null,
+  nextSyncToken: string | null
+) {
+  const supabase = getSupabase();
+  const updateData: any = {
+    last_sync_at: new Date().toISOString(),
+    sync_status: status,
+    sync_error: errorMsg,
+  };
+  if (nextSyncToken) {
+    updateData.next_sync_token = nextSyncToken;
+  }
+
+  if (supabase) {
+    await supabase
+      .from("google_connections")
+      .update(updateData)
+      .eq("user_id", userId);
+  } else {
+    const connection = demoGoogleConnections.get(userId);
+    if (connection) {
+      demoGoogleConnections.set(userId, {
+        ...connection,
+        ...updateData,
+      });
+    }
+  }
+}
+
+async function syncUserCalendar(userId: string, forceFull = false) {
+  console.log(`[Google Calendar Sync] Starting sync for user: ${userId}`);
+  const supabase = getSupabase();
+  let connection = null;
+
+  if (supabase) {
+    connection = await getUserGoogleConnection(userId);
+  } else {
+    connection = demoGoogleConnections.get(userId);
+  }
+
+  if (!connection) {
+    console.warn(`[Google Calendar Sync] No connection found for user ${userId}`);
+    return { success: false, error: "No connection" };
+  }
+
+  const isSyncActive = connection.sync_active !== false;
+  if (!isSyncActive) {
+    console.log(`[Google Calendar Sync] Sync is disabled for user ${userId}`);
+    return { success: true, message: "Sync is disabled" };
+  }
+
+  try {
+    let syncToken = forceFull ? undefined : connection.next_sync_token;
+    let timeMin = undefined;
+    
+    // Initial / Full sync: retrieve last 90 days
+    if (!syncToken) {
+      const ninetyDaysAgo = new Date();
+      ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+      timeMin = ninetyDaysAgo.toISOString();
+      console.log(`[Google Calendar Sync] First or full sync. Fetching events starting from ${timeMin}`);
+    } else {
+      console.log(`[Google Calendar Sync] Incremental sync using token: ${syncToken}`);
+    }
+
+    let pageToken = undefined;
+    let allEvents: any[] = [];
+    let nextSyncToken = undefined;
+
+    while (true) {
+      try {
+        const responseData = await listGoogleCalendarEvents(connection.access_token, {
+          syncToken,
+          timeMin,
+          pageToken,
+        });
+
+        if (responseData.items) {
+          allEvents = allEvents.concat(responseData.items);
+        }
+
+        nextSyncToken = responseData.nextSyncToken;
+        pageToken = responseData.nextPageToken;
+
+        if (!pageToken) {
+          break;
+        }
+      } catch (err: any) {
+        if (err.message === "SYNC_TOKEN_EXPIRED") {
+          console.warn(`[Google Calendar Sync] Sync token expired for user ${userId}. Retrying with full sync...`);
+          if (supabase) {
+            await supabase.from("google_connections").update({ next_sync_token: null }).eq("user_id", userId);
+          } else {
+            connection.next_sync_token = null;
+          }
+          return syncUserCalendar(userId, true);
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    console.log(`[Google Calendar Sync] Fetched ${allEvents.length} events/changes from Google Calendar.`);
+
+    if (allEvents.length === 0 && nextSyncToken) {
+      await updateConnectionSyncStatus(userId, "success", null, nextSyncToken);
+      return { success: true, imported: 0, updated: 0, cancelled: 0 };
+    }
+
+    let importedCount = 0;
+    let updatedCount = 0;
+    let cancelledCount = 0;
+    let conflictCount = 0;
+
+    let clients: any[] = [];
+    let services: any[] = [];
+
+    if (supabase) {
+      const { data: clientsData } = await supabase.from("clientes").select("*").eq("user_id", userId);
+      const { data: servicesData } = await supabase.from("servicos").select("*").eq("user_id", userId);
+      clients = clientsData || [];
+      services = servicesData || [];
+    }
+
+    for (const event of allEvents) {
+      const googleEventId = event.id;
+      if (!googleEventId) continue;
+
+      console.log(`[Google Calendar Sync] Processing event: ${googleEventId} - "${event.summary || "(No Title)"}" (Status: ${event.status})`);
+
+      let appointment: any = null;
+      if (supabase) {
+        const { data: appData, error: appError } = await supabase
+          .from("atendimentos")
+          .select("*")
+          .eq("google_event_id", googleEventId)
+          .maybeSingle();
+        if (!appError) {
+          appointment = appData;
+        }
+      }
+
+      if (event.status === "cancelled") {
+        if (appointment) {
+          if (appointment.status !== "Cancelado") {
+            console.log(`[Google Calendar Sync] Event ${googleEventId} cancelled on Google. Cancelling appointment: ${appointment.id}`);
+            if (supabase) {
+              await supabase
+                .from("atendimentos")
+                .update({ 
+                  status: "Cancelado", 
+                  google_last_sync: new Date().toISOString(),
+                  google_sync_status: "synced"
+                })
+                .eq("id", appointment.id);
+            }
+            cancelledCount++;
+          }
+        }
+        continue;
+      }
+
+      let eventDate = "";
+      let eventTime = "08:00";
+      let durationMinutes = 30;
+
+      if (event.start?.dateTime) {
+        const startDt = new Date(event.start.dateTime);
+        const yyyy = startDt.getFullYear();
+        const mm = String(startDt.getMonth() + 1).padStart(2, '0');
+        const dd = String(startDt.getDate()).padStart(2, '0');
+        eventDate = `${yyyy}-${mm}-${dd}`;
+        
+        const hh = String(startDt.getHours()).padStart(2, '0');
+        const min = String(startDt.getMinutes()).padStart(2, '0');
+        eventTime = `${hh}:${min}`;
+
+        if (event.end?.dateTime) {
+          const endDt = new Date(event.end.dateTime);
+          durationMinutes = Math.round((endDt.getTime() - startDt.getTime()) / 60000);
+          if (durationMinutes <= 0) durationMinutes = 30;
+        }
+      } else if (event.start?.date) {
+        eventDate = event.start.date;
+        eventTime = "08:00";
+        durationMinutes = 60;
+      } else {
+        continue;
+      }
+
+      const eventSummary = event.summary || "";
+      const eventDescription = event.description || "";
+      const googleUpdatedTime = event.updated ? new Date(event.updated).getTime() : 0;
+
+      if (appointment) {
+        const lastSyncTime = appointment.google_last_sync ? new Date(appointment.google_last_sync).getTime() : 0;
+        
+        if (lastSyncTime > googleUpdatedTime) {
+          console.log(`[Google Calendar Sync] Conflict: System has newer changes for appointment ${appointment.id}. Skipping.`);
+          conflictCount++;
+          continue;
+        }
+        
+        console.log(`[Google Calendar Sync] Updating existing appointment ${appointment.id}`);
+        const updatedFields: any = {
+          data: eventDate,
+          hora: eventTime,
+          duracao: durationMinutes,
+          observacoes: eventDescription,
+          google_last_sync: new Date().toISOString(),
+          google_sync_status: "synced"
+        };
+
+        if (supabase) {
+          const { error: updateErr } = await supabase
+            .from("atendimentos")
+            .update(updatedFields)
+            .eq("id", appointment.id);
+          
+          if (updateErr) {
+            console.error(`[Google Calendar Sync] Error updating appointment ${appointment.id}:`, updateErr);
+          } else {
+            updatedCount++;
+          }
+        }
+      } else {
+        console.log(`[Google Calendar Sync] Inserting new appointment for event ${googleEventId}`);
+
+        let clientName = "";
+        let clientWhatsapp = "";
+
+        const clientMatch = eventDescription.match(/Cliente:\s*(.*)/i);
+        if (clientMatch && clientMatch[1]) {
+          clientName = clientMatch[1].trim();
+        }
+
+        const whatsappMatch = eventDescription.match(/WhatsApp:\s*(.*)/i);
+        if (whatsappMatch && whatsappMatch[1]) {
+          clientWhatsapp = whatsappMatch[1].trim();
+        }
+
+        if (!clientName) {
+          if (eventSummary.startsWith("Estética:")) {
+            clientName = eventSummary.substring("Estética:".length).trim();
+          } else {
+            clientName = eventSummary.trim();
+          }
+        }
+
+        if (!clientName) {
+          clientName = "Cliente do Google Agenda";
+        }
+
+        let matchedClient = clients.find(
+          c => c.nome.toLowerCase() === clientName.toLowerCase() ||
+          (clientWhatsapp && c.whatsapp === clientWhatsapp)
+        );
+
+        if (!matchedClient && supabase) {
+          console.log(`[Google Calendar Sync] Client "${clientName}" not found. Creating brand-new client.`);
+          const { data: newClient, error: clientErr } = await supabase
+            .from("clientes")
+            .insert({
+              user_id: userId,
+              nome: clientName,
+              whatsapp: clientWhatsapp,
+              ativo: true
+            })
+            .select()
+            .single();
+
+          if (clientErr) {
+            console.error("[Google Calendar Sync] Error creating client:", clientErr);
+          } else {
+            matchedClient = newClient;
+            clients.push(newClient);
+          }
+        }
+
+        const finalClientId = matchedClient?.id;
+        if (!finalClientId) {
+          console.error(`[Google Calendar Sync] Failed to obtain/create client for event ${googleEventId}`);
+          continue;
+        }
+
+        let matchedService = services.find(
+          s => eventSummary.toLowerCase().includes(s.nome.toLowerCase()) ||
+          eventDescription.toLowerCase().includes(s.nome.toLowerCase())
+        );
+
+        if (!matchedService && services.length > 0) {
+          matchedService = services[0];
+        }
+
+        if (!matchedService && supabase) {
+          console.log(`[Google Calendar Sync] Creating default service "Estética" for user ${userId}`);
+          const { data: newService, error: serviceErr } = await supabase
+            .from("servicos")
+            .insert({
+              user_id: userId,
+              nome: "Estética",
+              valor: 0.00,
+              custo: 0.00,
+              duracao: 30,
+            })
+            .select()
+            .single();
+
+          if (serviceErr) {
+            console.error("[Google Calendar Sync] Error creating default service:", serviceErr);
+          } else {
+            matchedService = newService;
+            services.push(newService);
+          }
+        }
+
+        const finalServiceId = matchedService?.id;
+        if (!finalServiceId) {
+          console.error(`[Google Calendar Sync] Failed to obtain/create service for event ${googleEventId}`);
+          continue;
+        }
+
+        const valorCobrado = matchedService ? Number(matchedService.valor) : 0;
+        const custo = matchedService ? Number(matchedService.custo) : 0;
+
+        const servicesDetails = matchedService ? [{
+          servico_id: matchedService.id,
+          nome: matchedService.nome,
+          valor: valorCobrado,
+          duracao: durationMinutes,
+          custo: custo
+        }] : [];
+
+        const newAppointment: any = {
+          user_id: userId,
+          cliente_id: finalClientId,
+          servico_id: finalServiceId,
+          data: eventDate,
+          hora: eventTime,
+          duracao: durationMinutes,
+          status: "Agendado",
+          valor_cobrado: valorCobrado,
+          forma_pagamento: "Pix",
+          lucro_liquido: valorCobrado - custo,
+          custo: custo,
+          observacoes: eventDescription,
+          google_event_id: googleEventId,
+          google_calendar_id: "primary",
+          google_last_sync: new Date().toISOString(),
+          google_sync_status: "synced",
+          servicos_detalhes: servicesDetails,
+        };
+
+        if (supabase) {
+          const { data: insertedApp, error: insertErr } = await supabase
+            .from("atendimentos")
+            .insert([newAppointment])
+            .select()
+            .single();
+
+          if (insertErr) {
+            console.error("[Google Calendar Sync] Error inserting appointment:", insertErr);
+          } else {
+            importedCount++;
+            if (servicesDetails.length > 0) {
+              const servicesToInsert = servicesDetails.map(s => ({
+                atendimento_id: insertedApp.id,
+                servico_id: s.servico_id,
+                valor_aplicado: s.valor,
+                custo_aplicado: s.custo,
+                duracao_aplicada: s.duracao
+              }));
+              await supabase.from("atendimento_servicos").insert(servicesToInsert);
+            }
+          }
+        }
+      }
+    }
+
+    console.log(`[Google Calendar Sync] Sync finished for ${userId}. Imported: ${importedCount}, Updated: ${updatedCount}, Cancelled: ${cancelledCount}`);
+    await updateConnectionSyncStatus(userId, "success", null, nextSyncToken);
+
+    return {
+      success: true,
+      imported: importedCount,
+      updated: updatedCount,
+      cancelled: cancelledCount,
+      conflicts: conflictCount,
+    };
+  } catch (err: any) {
+    console.error(`[Google Calendar Sync] Exception for ${userId}:`, err);
+    await updateConnectionSyncStatus(userId, "error", err.message || String(err), null);
+    return { success: false, error: err.message || String(err) };
+  }
+}
+
+// Automatic Polling Loop for Active Sync Users
+setInterval(async () => {
+  try {
+    const supabase = getSupabase();
+    if (!supabase) return;
+
+    const { data: connections, error } = await supabase
+      .from("google_connections")
+      .select("user_id")
+      .eq("sync_active", true);
+
+    if (error) {
+      console.error("[Google Calendar Background Poller] Error fetching active connections:", error);
+      return;
+    }
+
+    if (connections && connections.length > 0) {
+      console.log(`[Google Calendar Background Poller] Syncing ${connections.length} active connection(s)`);
+      for (const conn of connections) {
+        try {
+          await syncUserCalendar(conn.user_id);
+        } catch (e) {
+          console.error(`[Google Calendar Background Poller] Failed to sync ${conn.user_id}:`, e);
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[Google Calendar Background Poller] Unexpected exception:", err);
+  }
+}, 60000); // Poll once every 60 seconds
+
 
 // ==========================================
 // Vite Integration & Production Server Setup
