@@ -1147,7 +1147,7 @@ export const databaseService = {
 
     const { data, error: rpcError } = await supabase.rpc("create_system_user", {
       p_username: payload.username,
-      p_password: payload.password_hash,
+      p_password: payload.password_hash || "",
       p_nome: payload.nome,
       p_role: payload.role
     });
