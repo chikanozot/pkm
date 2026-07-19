@@ -31,7 +31,66 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const fetchAndMergeProfile = async (supabaseUserId: string, authEmail?: string) => {
     try {
-      const profile = await databaseService.getUserProfile(supabaseUserId);
+      let profile = await databaseService.getUserProfile(supabaseUserId);
+      
+      // Self-healing: If user is authenticated via Supabase but profile row is missing in public.users
+      if (!profile && authEmail && isSupabaseConfigured && supabase) {
+        console.warn(`Profile for user ${supabaseUserId} is missing. Recreating profile dynamically...`);
+        const cleanEmail = authEmail.toLowerCase().trim();
+        const baseUsername = cleanEmail.split("@")[0];
+        
+        // Ensure username is unique to avoid unique constraint violations
+        let uniqueUsername = baseUsername;
+        let suffix = 1;
+        const usersList = await databaseService.getSystemUsers();
+        while (usersList.some(u => u.username?.toLowerCase() === uniqueUsername.toLowerCase() && u.id !== supabaseUserId)) {
+          uniqueUsername = `${baseUsername}${suffix}`;
+          suffix++;
+        }
+
+        // Fetch metadata from Supabase user object if available
+        let nome = "Usuário";
+        let celular = "";
+        let empresa = "";
+        try {
+          const { data: { user: authUser } } = await supabase.auth.getUser();
+          if (authUser?.user_metadata) {
+            nome = authUser.user_metadata.nome || authUser.user_metadata.name || nome;
+            celular = authUser.user_metadata.celular || celular;
+            empresa = authUser.user_metadata.empresa || empresa;
+          }
+        } catch (metaErr) {
+          console.error("Could not fetch user metadata during self-healing, using defaults:", metaErr);
+        }
+
+        const fallbackProfile = {
+          id: supabaseUserId,
+          username: uniqueUsername,
+          nome,
+          role: "user" as const,
+          email: cleanEmail,
+          celular: celular || null,
+          empresa: empresa || null,
+          status: "Aguardando Assinatura",
+          plano_atual: "Plano Bronze",
+          plano_status: "Inativo",
+          plano_valor: 49.90,
+          ultimo_acesso: new Date().toISOString(),
+          password_hash: "auth_managed"
+        };
+
+        const { error: insertErr } = await supabase
+          .from("users")
+          .insert([fallbackProfile]);
+
+        if (insertErr) {
+          console.warn("Direct insert profile during self-healing failed. Falling back to helper...", insertErr);
+          await databaseService.insertSystemUser(fallbackProfile as any);
+        }
+
+        profile = await databaseService.getUserProfile(supabaseUserId);
+      }
+
       if (profile) {
         const emailConfirmed = authEmail ? true : (profile.status !== "Aguardando Confirmação");
         const sessionUser: UserSession = {
@@ -273,6 +332,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const cleanEmail = email.trim().toLowerCase();
       const cleanPhone = celular.trim();
       const cleanName = name.trim();
+      const cleanUsername = cleanEmail.split("@")[0].toLowerCase();
 
       // 1. Password validations
       if (passwordOrToken.length < 8) {
@@ -285,7 +345,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         throw new Error("A senha deve conter pelo menos um número.");
       }
 
-      // 2. Validate uniqueness of Email and Phone in public.users first (instant feedback)
+      // 2. Validate uniqueness of Email, Phone, and Username in public.users first (instant feedback)
       const usersList = await databaseService.getSystemUsers();
       if (usersList && usersList.length > 0) {
         const emailExists = usersList.some(u => u.email?.toLowerCase() === cleanEmail);
@@ -296,13 +356,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (phoneExists) {
           throw new Error("Este celular já está em uso por outra conta.");
         }
+        const usernameExists = usersList.some(u => u.username?.toLowerCase() === cleanUsername);
+        if (usernameExists) {
+          throw new Error("Este nome de usuário já está em uso. Escolha outro.");
+        }
       }
 
-      // 3. Register user with official Supabase Auth
+      // 3. Register user with official Supabase Auth (with explicit redirect URLs for production)
       const { data: authData, error: authErr } = await supabase.auth.signUp({
         email: cleanEmail,
         password: passwordOrToken,
         options: {
+          emailRedirectTo: window.location.origin,
           data: {
             nome: cleanName,
             celular: cleanPhone,
@@ -317,7 +382,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const userId = authData.user.id;
         const profilePayload = {
           id: userId,
-          username: cleanEmail.split("@")[0],
+          username: cleanUsername,
           nome: cleanName,
           role: "user" as const,
           email: cleanEmail,
@@ -330,14 +395,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           ultimo_acesso: new Date().toISOString()
         };
 
-        // 4. Register profile row in public.users
-        const { error: insertErr } = await supabase
+        // 4. Register profile row in public.users (Idempotent upsert logic to support partial signups)
+        const { data: existingProfile } = await supabase
           .from("users")
-          .insert([profilePayload]);
+          .select("*")
+          .eq("id", userId)
+          .maybeSingle();
 
-        if (insertErr) {
-          console.warn("Direct insert profile failed. Falling back to helper...", insertErr);
-          await databaseService.insertSystemUser(profilePayload as any);
+        if (!existingProfile) {
+          const { error: insertErr } = await supabase
+            .from("users")
+            .insert([profilePayload]);
+
+          if (insertErr) {
+            console.warn("Direct insert profile failed. Falling back to helper...", insertErr);
+            await databaseService.insertSystemUser(profilePayload as any);
+          }
+        } else {
+          console.log("Profile already exists. Updating existing details...");
+          const { error: updateErr } = await supabase
+            .from("users")
+            .update({
+              nome: cleanName,
+              celular: cleanPhone,
+              empresa: empresa?.trim() || null,
+              ultimo_acesso: new Date().toISOString()
+            })
+            .eq("id", userId);
+
+          if (updateErr) {
+            console.error("Failed to update profile during signup", updateErr);
+          }
         }
 
         // Return user session
