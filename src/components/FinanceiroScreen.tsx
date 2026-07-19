@@ -27,6 +27,11 @@ export const FinanceiroScreen: React.FC = () => {
   const [formaPagamento, setFormaPagamento] = useState("Pix");
   const [observacoes, setObservacoes] = useState("");
 
+  const formatClienteNome = (nome?: string) => {
+    if (!nome) return "Cliente Avulso";
+    return nome.replace(/^\[EXCLUÍDO\]\s*/i, "");
+  };
+
   // Filters State
   const [filterStartDate, setFilterStartDate] = useState(() => {
     const d = new Date();
@@ -316,7 +321,7 @@ export const FinanceiroScreen: React.FC = () => {
                       </span>
                     </div>
                     <div className="flex items-center gap-3 text-[11px] text-stone-500 font-medium">
-                      <span>Ref: <b>{new Date(des.data).toLocaleDateString("pt-BR")}</b></span>
+                      <span>Ref: <b>{new Date(des.data + "T12:00:00").toLocaleDateString("pt-BR")}</b></span>
                       <span>Pagto: <b>{des.forma_pagamento}</b></span>
                     </div>
                     {des.observacoes && (
@@ -366,13 +371,13 @@ export const FinanceiroScreen: React.FC = () => {
                 <div key={rev.id} className="p-4 flex items-start justify-between gap-4 hover:bg-stone-50/50 transition-all">
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-semibold text-stone-800">{rev.cliente?.nome || "Cliente avulso"}</span>
+                      <span className="text-xs font-semibold text-stone-800">{formatClienteNome(rev.cliente?.nome)}</span>
                       <span className="bg-rose-50 text-rose-700 border border-rose-100 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded-full">
                         {getServicosNomes(rev)}
                       </span>
                     </div>
                     <div className="flex items-center gap-3 text-[11px] text-stone-500 font-medium">
-                      <span>Ref: <b>{new Date(rev.data).toLocaleDateString("pt-BR")}</b></span>
+                      <span>Ref: <b>{new Date(rev.data + "T12:00:00").toLocaleDateString("pt-BR")}</b></span>
                       <span>Pagto: <b>{rev.forma_pagamento}</b></span>
                     </div>
                     {rev.fiado && (

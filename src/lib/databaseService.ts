@@ -49,15 +49,15 @@ end;
 $$ language plpgsql stable security definer;
 
 -- 5. Seed do usuário administrador MASTER inicial
--- Usuário: zotgod | Senha: Caio1993
+-- Usuário: master_admin | Senha: [DEFINA_SUA_SENHA_AQUI]
 insert into public.users (username, password_hash, nome, role)
 values (
-  'zotgod',
-  crypt('Caio1993', gen_salt('bf', 8)),
+  'master_admin',
+  crypt('SUA_SENHA_AQUI', gen_salt('bf', 8)),
   'Administrador Master',
   'master'
 ) on conflict (username) do update
-set password_hash = crypt('Caio1993', gen_salt('bf', 8)), nome = 'Administrador Master', role = 'master';
+set password_hash = crypt('SUA_SENHA_AQUI', gen_salt('bf', 8)), nome = 'Administrador Master', role = 'master';
 
 -- 6. RPC para autenticar usuário (Sem expor hashes no cliente)
 create or replace function public.authenticate_user(p_username text, p_password text)
@@ -412,12 +412,28 @@ export const databaseService = {
 
   async deleteCliente(id: string): Promise<boolean> {
     checkSupabase();
-    const { error } = await supabase
+    
+    // Buscar o nome atual do cliente
+    const { data: client, error: fetchErr } = await supabase
       .from("clientes")
-      .delete()
+      .select("nome")
+      .eq("id", id)
+      .single();
+
+    if (fetchErr || !client) {
+      throw fetchErr || new Error("Cliente não encontrado.");
+    }
+
+    const currentName = client.nome;
+    const newName = currentName.startsWith("[EXCLUÍDO] ") ? currentName : `[EXCLUÍDO] ${currentName}`;
+
+    // Soft-delete: atualizar o nome com o prefixo [EXCLUÍDO] e desativar o cliente (ativo = false)
+    const { error: updateErr } = await supabase
+      .from("clientes")
+      .update({ nome: newName, ativo: false })
       .eq("id", id);
 
-    if (error) throw error;
+    if (updateErr) throw updateErr;
     return true;
   },
 
@@ -571,12 +587,12 @@ export const databaseService = {
   async insertAtendimento(atendimento: Omit<Atendimento, "id" | "created_at">): Promise<Atendimento> {
     checkSupabase();
     // Sync with Google Agenda if connected
-    let googleEventId = undefined;
+    let googleEventId = (atendimento as any).google_event_id || undefined;
     try {
       const isGoogleEnabledResponse = await fetch(`/api/auth/google/status?userId=${atendimento.user_id}`);
       const isGoogleEnabled = await isGoogleEnabledResponse.json();
       
-      if (isGoogleEnabled.connected && atendimento.status === "Agendado") {
+      if (isGoogleEnabled.connected && atendimento.status === "Agendado" && !googleEventId) {
         // Fetch clients and services to build clean description
         const clients = await this.getClientes(atendimento.user_id);
         const services = await this.getServicos(atendimento.user_id);
@@ -620,9 +636,9 @@ export const databaseService = {
     const docToInsert = {
       ...pureAtendimento,
       google_event_id: googleEventId,
-      google_calendar_id: googleEventId ? "primary" : null,
-      google_last_sync: googleEventId ? new Date().toISOString() : null,
-      google_sync_status: googleEventId ? "synced" : null
+      google_calendar_id: googleEventId ? "primary" : (pureAtendimento.google_calendar_id || null),
+      google_last_sync: googleEventId ? new Date().toISOString() : (pureAtendimento.google_last_sync || null),
+      google_sync_status: googleEventId ? "synced" : (pureAtendimento.google_sync_status || null)
     };
 
     const { data, error } = await supabase
@@ -1011,40 +1027,167 @@ export const databaseService = {
   async getSystemUsers(): Promise<any[]> {
     checkSupabase();
     try {
-      const { data, error } = await supabase.rpc("get_system_users");
-      if (!error && data) {
-        return data;
+      const { data, error } = await supabase
+        .from("users")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        console.warn("Direct select on users failed, trying RPC...", error);
+        const { data: rpcData, error: rpcErr } = await supabase.rpc("get_system_users");
+        if (!rpcErr && rpcData) return rpcData;
+        throw error;
       }
-      console.warn("RPC get_system_users falhou ou não existe, tentando select direto...", error);
-    } catch (rpcErr) {
-      console.warn("Erro ao chamar RPC get_system_users, tentando select direto...", rpcErr);
+      return data || [];
+    } catch (err) {
+      console.error("Erro ao carregar usuários", err);
+      return [];
     }
-
-    const { data, error } = await supabase
-      .from("users")
-      .select("id, username, nome, role, created_at")
-      .order("created_at", { ascending: false });
-
-    if (error) throw error;
-    return data || [];
   },
 
-  async insertSystemUser(payload: { username: string; password_hash: string; nome: string; role: string }): Promise<any> {
+  async getUserProfile(userId: string): Promise<any | null> {
     checkSupabase();
-    const { data, error } = await supabase.rpc("create_system_user", {
+    try {
+      const { data, error } = await supabase
+        .from("users")
+        .select("*")
+        .eq("id", userId)
+        .maybeSingle();
+
+      if (error) throw error;
+      return data;
+    } catch (err) {
+      console.error("Erro ao obter perfil do usuário", err);
+      return null;
+    }
+  },
+
+  async updateUserProfile(userId: string, payload: any): Promise<any | null> {
+    checkSupabase();
+    try {
+      const { data, error } = await supabase
+        .from("users")
+        .update(payload)
+        .eq("id", userId)
+        .select()
+        .maybeSingle();
+
+      if (error) throw error;
+      return data;
+    } catch (err) {
+      console.error("Erro ao atualizar perfil do usuário", err);
+      throw err;
+    }
+  },
+
+  async insertSystemUser(payload: { 
+    id?: string; 
+    username: string; 
+    password_hash: string; 
+    nome: string; 
+    role: string; 
+    email?: string; 
+    celular?: string; 
+    empresa?: string; 
+    status?: string;
+    created_by?: string;
+    must_change_password?: boolean;
+    observacoes_admin?: string;
+    plano_atual?: string;
+    plano_status?: string;
+    plano_valor?: number;
+    plano_data_contratacao?: string;
+    plano_data_renovacao?: string;
+    plano_data_vencimento?: string;
+    plano_gateway?: string;
+    plano_ultimo_pagamento?: string;
+    plano_proximo_pagamento?: string;
+    situacao_pagamento?: string;
+  }): Promise<any> {
+    checkSupabase();
+    try {
+      // Direct insert into the table to support newly added columns
+      const insertObj: any = {
+        username: payload.username.toLowerCase(),
+        password_hash: payload.password_hash ? payload.password_hash : "auth_managed",
+        nome: payload.nome,
+        role: payload.role,
+        email: payload.email || null,
+        celular: payload.celular || null,
+        empresa: payload.empresa || null,
+        status: payload.status || "Aguardando Assinatura",
+        plano_atual: payload.plano_atual || "Plano Bronze",
+        plano_status: payload.plano_status || "Inativo"
+      };
+      
+      if (payload.id) insertObj.id = payload.id;
+      if (payload.created_by) insertObj.created_by = payload.created_by;
+      if (payload.must_change_password !== undefined) insertObj.must_change_password = payload.must_change_password;
+      if (payload.observacoes_admin) insertObj.observacoes_admin = payload.observacoes_admin;
+      if (payload.plano_valor !== undefined) insertObj.plano_valor = payload.plano_valor;
+      if (payload.plano_data_contratacao) insertObj.plano_data_contratacao = payload.plano_data_contratacao;
+      if (payload.plano_data_renovacao) insertObj.plano_data_renovacao = payload.plano_data_renovacao;
+      if (payload.plano_data_vencimento) insertObj.plano_data_vencimento = payload.plano_data_vencimento;
+      if (payload.plano_gateway) insertObj.plano_gateway = payload.plano_gateway;
+      if (payload.plano_ultimo_pagamento) insertObj.plano_ultimo_pagamento = payload.plano_ultimo_pagamento;
+      if (payload.plano_proximo_pagamento) insertObj.plano_proximo_pagamento = payload.plano_proximo_pagamento;
+      if (payload.situacao_pagamento) insertObj.situacao_pagamento = payload.situacao_pagamento;
+
+      const { data, error } = await supabase
+        .from("users")
+        .insert([insertObj])
+        .select()
+        .single();
+
+      if (!error) return data;
+      console.warn("Direct insert user failed, falling back to RPC...", error);
+    } catch (err) {
+      console.warn("Direct insert user failed, falling back to RPC...", err);
+    }
+
+    const { data, error: rpcError } = await supabase.rpc("create_system_user", {
       p_username: payload.username,
       p_password: payload.password_hash,
       p_nome: payload.nome,
       p_role: payload.role
     });
 
-    if (error) throw error;
+    if (rpcError) throw rpcError;
     return data && data[0];
   },
 
-  async updateSystemUser(id: string, payload: { username: string; password_hash?: string; nome: string; role: string }): Promise<any> {
+  async updateSystemUser(id: string, payload: { username: string; password_hash?: string; nome: string; role: string; email?: string; celular?: string; empresa?: string; status?: string; plano_atual?: string; plano_status?: string; plano_valor?: number; plano_data_vencimento?: string }): Promise<any> {
     checkSupabase();
-    const { data, error } = await supabase.rpc("update_system_user", {
+    try {
+      // Direct update to support new columns
+      const updateData: any = {
+        username: payload.username.toLowerCase(),
+        nome: payload.nome,
+        role: payload.role,
+      };
+      if (payload.email !== undefined) updateData.email = payload.email;
+      if (payload.celular !== undefined) updateData.celular = payload.celular;
+      if (payload.empresa !== undefined) updateData.empresa = payload.empresa;
+      if (payload.status !== undefined) updateData.status = payload.status;
+      if (payload.plano_atual !== undefined) updateData.plano_atual = payload.plano_atual;
+      if (payload.plano_status !== undefined) updateData.plano_status = payload.plano_status;
+      if (payload.plano_valor !== undefined) updateData.plano_valor = payload.plano_valor;
+      if (payload.plano_data_vencimento !== undefined) updateData.plano_data_vencimento = payload.plano_data_vencimento;
+
+      const { data, error } = await supabase
+        .from("users")
+        .update(updateData)
+        .eq("id", id)
+        .select()
+        .maybeSingle();
+
+      if (!error) return data;
+      console.warn("Direct update user failed, falling back to RPC...", error);
+    } catch (err) {
+      console.warn("Direct update user failed, falling back to RPC...", err);
+    }
+
+    const { data, error: rpcError } = await supabase.rpc("update_system_user", {
       p_id: id,
       p_username: payload.username,
       p_password: payload.password_hash || "",
@@ -1052,7 +1195,7 @@ export const databaseService = {
       p_role: payload.role
     });
 
-    if (error) throw error;
+    if (rpcError) throw rpcError;
     return data && data[0];
   },
 
@@ -1073,10 +1216,6 @@ export const databaseService = {
     }
 
     // FALLBACK SEGURO: Excluir o usuário diretamente da tabela "users".
-    // Como as chaves estrangeiras no banco de dados estão configuradas com "ON DELETE CASCADE",
-    // excluir da tabela "users" irá disparar a exclusão automática de todos os atendimentos,
-    // clientes, serviços, despesas e google_connections no próprio Postgres, sem precisar
-    // referenciar essas outras tabelas em JavaScript (evitando erros de Schema Cache do PostgREST).
     const { error: errUser } = await supabase
       .from("users")
       .delete()
@@ -1084,5 +1223,117 @@ export const databaseService = {
     if (errUser) throw errUser;
 
     return true;
+  },
+
+  // ==========================================
+  // SAAS CONFIGURATION & SETTINGS
+  // ==========================================
+  async getSaaSSettings(): Promise<any> {
+    checkSupabase();
+    const defaultSettings = {
+      id: "00000000-0000-0000-0000-000000000001",
+      saas_name: "LUMORA Flow",
+      logo_url: "",
+      plano_bronze_valor: 49.90,
+      plano_prata_valor: 99.90,
+      plano_ouro_valor: 149.90,
+      dias_garantia: 7,
+      garantia_ativa: true,
+      novos_cadastros_ativos: true,
+      mensagem_inicial: "Seja bem-vindo ao LUMORA Flow!",
+      limite_clientes_bronze: 50,
+      limite_clientes_prata: 200,
+      limite_clientes_ouro: 99999,
+      mercado_pago_public_key: "",
+      mercado_pago_access_token: "",
+      whatsapp_api_key: "",
+      google_calendar_client_id: "",
+      google_calendar_client_secret: "",
+      configuracoes_gerais: {}
+    };
+
+    try {
+      const { data, error } = await supabase
+        .from("saas_settings")
+        .select("*")
+        .limit(1)
+        .maybeSingle();
+
+      if (error) {
+        console.warn("saas_settings table query failed. Maybe migration was not run yet.", error);
+        return defaultSettings;
+      }
+      return data || defaultSettings;
+    } catch (err) {
+      console.warn("Error getting saas_settings, using fallback", err);
+      return defaultSettings;
+    }
+  },
+
+  async updateSaaSSettings(id: string, settings: any): Promise<any> {
+    checkSupabase();
+    try {
+      const { data, error } = await supabase
+        .from("saas_settings")
+        .update({
+          ...settings,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", id)
+        .select()
+        .maybeSingle();
+
+      if (error) throw error;
+      return data;
+    } catch (err) {
+      console.error("Error updating saas_settings", err);
+      throw err;
+    }
+  },
+
+  // ==========================================
+  // SAAS LOGS / HISTORY
+  // ==========================================
+  async getSaaSLogs(): Promise<any[]> {
+    checkSupabase();
+    try {
+      const { data, error } = await supabase
+        .from("saas_logs")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        console.warn("saas_logs table query failed. Maybe migration was not run yet.", error);
+        return [];
+      }
+      return data || [];
+    } catch (err) {
+      console.warn("Error getting saas_logs", err);
+      return [];
+    }
+  },
+
+  async logSaaSAction(payload: { admin_id?: string; admin_nome?: string; acao: string; user_id?: string; user_nome?: string }): Promise<boolean> {
+    checkSupabase();
+    try {
+      const { error } = await supabase
+        .from("saas_logs")
+        .insert([{
+          admin_id: payload.admin_id || null,
+          admin_nome: payload.admin_nome || "Sistema",
+          acao: payload.acao,
+          user_id: payload.user_id || null,
+          user_nome: payload.user_nome || null
+        }]);
+
+      if (error) {
+        console.warn("Failed to insert log. saas_logs table might not exist.", error);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.warn("Error logging SaaS action", err);
+      return false;
+    }
   }
 };;

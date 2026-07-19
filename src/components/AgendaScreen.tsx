@@ -14,6 +14,8 @@ import {
 export const AgendaScreen: React.FC = () => {
   const { user } = useAuth();
   const [atendimentos, setAtendimentos] = useState<Atendimento[]>([]);
+  const [externalEvents, setExternalEvents] = useState<any[]>([]);
+  const [activeGoogleEventId, setActiveGoogleEventId] = useState<string | null>(null);
 
   const getServicosNomes = (at: Atendimento) => {
     if (at.servicos_detalhes && Array.isArray(at.servicos_detalhes) && at.servicos_detalhes.length > 0) {
@@ -122,6 +124,27 @@ export const AgendaScreen: React.FC = () => {
 
   useEffect(() => {
     loadData();
+    if (user) {
+      const syncCalendar = async () => {
+        try {
+          const res = await fetch("/api/calendar/sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userId: user.id }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success && (data.imported > 0 || data.updated > 0 || data.cancelled > 0)) {
+              console.log(`[Google Sync Agenda] Importados: ${data.imported}, Atualizados: ${data.updated}, Cancelados: ${data.cancelled}`);
+              loadData();
+            }
+          }
+        } catch (e) {
+          console.error("Erro na sincronização automática na Agenda:", e);
+        }
+      };
+      syncCalendar();
+    }
   }, [user]);
 
   useEffect(() => {
@@ -134,6 +157,11 @@ export const AgendaScreen: React.FC = () => {
     };
   }, [clientes, servicos, selectedDate]);
 
+  const formatClienteNome = (nome?: string) => {
+    if (!nome) return "Cliente Avulso";
+    return nome.replace(/^\[EXCLUÍDO\]\s*/i, "");
+  };
+
   const loadData = async () => {
     if (!user) return;
     setLoading(true);
@@ -144,6 +172,18 @@ export const AgendaScreen: React.FC = () => {
       setAtendimentos(dataAt);
       setClientes(dataCl.filter(c => c.ativo)); // only active customers for scheduling
       setServicos(dataSv);
+
+      try {
+        const extRes = await fetch(`/api/calendar/external-events?userId=${user.id}`);
+        if (extRes.ok) {
+          const extData = await extRes.json();
+          if (extData.success && extData.events) {
+            setExternalEvents(extData.events);
+          }
+        }
+      } catch (e) {
+        console.error("Erro ao carregar compromissos externos:", e);
+      }
     } catch (err) {
       console.error("Erro ao carregar agenda", err);
     } finally {
@@ -166,6 +206,7 @@ export const AgendaScreen: React.FC = () => {
   const handleOpenForm = (at: Atendimento | null = null) => {
     if (at) {
       setEditId(at.id);
+      setActiveGoogleEventId(at.google_event_id || null);
       setClienteId(at.cliente_id);
       setServicoId(at.servico_id);
       setData(at.data);
@@ -203,6 +244,7 @@ export const AgendaScreen: React.FC = () => {
       }
     } else {
       setEditId(null);
+      setActiveGoogleEventId(null);
       setClienteId(clientes[0]?.id || "");
       const firstService = servicos[0];
       setServicoId(firstService?.id || "");
@@ -242,9 +284,51 @@ export const AgendaScreen: React.FC = () => {
     setIsFormOpen(true);
   };
 
+  const handleOpenFinalizeExternalModal = (event: any) => {
+    setEditId(null);
+    setActiveGoogleEventId(event.id);
+    setClienteId(clientes[0]?.id || "");
+    const firstService = servicos[0];
+    setServicoId(firstService?.id || "");
+    setData(event.data);
+    setHora(event.hora);
+    setDuracao(event.duracao || 30);
+    setObservacoes(event.description || "");
+    setStatus("Concluído"); // Pre-select Concluído for finalizing
+    setValorCobrado(firstService?.valor || 0);
+    setSalvarValor(true); // pre-select "salvar no financeiro"
+    setFormaPagamento("Pix");
+    setPago(true); // pre-select "pago"
+    setFiado(false);
+    setDataPagamento(new Date().toISOString().substring(0, 10));
+    setDataPrevistaRecebimento("");
+    setValorRecebido(firstService?.valor || 0);
+    setDesconto(0);
+    setAcrescimos(0);
+    setCusto(firstService?.custo || 0);
+    setProdutosUtilizados(firstService?.produtos || []);
+
+    if (firstService) {
+      setSelectedServices([
+        {
+          servico_id: firstService.id,
+          nome: firstService.nome,
+          valor: firstService.valor,
+          duracao: firstService.duracao,
+          custo: firstService.custo || 0
+        }
+      ]);
+    } else {
+      setSelectedServices([]);
+    }
+
+    setIsFormOpen(true);
+  };
+
   const handleCloseForm = () => {
     setIsFormOpen(false);
     setEditId(null);
+    setActiveGoogleEventId(null);
   };
 
   const handleSaveAppointment = async (e: React.FormEvent) => {
@@ -295,6 +379,7 @@ export const AgendaScreen: React.FC = () => {
       produtos_utilizados: finalProdutos,
       lucro_liquido: netProfit,
       servicos_detalhes: selectedServices,
+      google_event_id: activeGoogleEventId || undefined,
     };
 
     try {
@@ -470,6 +555,16 @@ export const AgendaScreen: React.FC = () => {
     return atendimentos.filter(a => a.data === dateStr);
   };
 
+  const getDayExternalEvents = (dateStr: string) => {
+    return externalEvents.filter(e => e.data === dateStr);
+  };
+
+  const getMergedDayItems = (dateStr: string) => {
+    const regular = getDayAppointments(dateStr).map(at => ({ ...at, isExternal: false }));
+    const external = getDayExternalEvents(dateStr).map(e => ({ ...e, isExternal: true }));
+    return [...regular, ...external].sort((a, b) => a.hora.localeCompare(b.hora));
+  };
+
   const changeMonth = (offset: number) => {
     const d = new Date(selectedDate + "T12:00:00");
     d.setMonth(d.getMonth() + offset);
@@ -585,6 +680,8 @@ export const AgendaScreen: React.FC = () => {
                       }
                       
                       const dayAppointments = getDayAppointments(dayStr);
+                      const dayExternal = getDayExternalEvents(dayStr);
+                      const totalCount = dayAppointments.length + dayExternal.length;
                       const isToday = dayStr === new Date().toISOString().substring(0, 10);
                       const isSelected = dayStr === selectedDate;
                       const dayNumber = dayStr.split("-")[2];
@@ -604,15 +701,15 @@ export const AgendaScreen: React.FC = () => {
                             }`}>
                               {parseInt(dayNumber)}
                             </span>
-                            {dayAppointments.length > 0 && (
+                            {totalCount > 0 && (
                               <span className="text-[9px] bg-stone-100 text-stone-600 border border-stone-200 font-bold px-1 py-0.5 rounded-full">
-                                {dayAppointments.length} at
+                                {totalCount} {totalCount === 1 ? "it" : "its"}
                               </span>
                             )}
                           </div>
 
                           <div className="space-y-1 overflow-y-auto max-h-16">
-                            {dayAppointments.slice(0, 3).map((at) => (
+                            {dayAppointments.slice(0, 2).map((at) => (
                               <div 
                                 key={at.id}
                                 className={`text-[10px] px-1.5 py-0.5 rounded border truncate ${
@@ -621,11 +718,19 @@ export const AgendaScreen: React.FC = () => {
                                   "bg-rose-50 text-rose-800 border-rose-100"
                                 }`}
                               >
-                                {at.hora} • {at.cliente?.nome || "Cliente"}
+                                {at.hora} • {formatClienteNome(at.cliente?.nome)}
                               </div>
                             ))}
-                            {dayAppointments.length > 3 && (
-                              <p className="text-[8px] text-stone-400 italic text-center">+{dayAppointments.length - 3} mais</p>
+                            {dayExternal.slice(0, 2).map((evt) => (
+                              <div 
+                                key={evt.id}
+                                className="text-[10px] px-1.5 py-0.5 rounded border truncate bg-blue-50 text-blue-800 border-blue-100"
+                              >
+                                {evt.hora} • {evt.summary} (G)
+                              </div>
+                            ))}
+                            {totalCount > 4 && (
+                              <p className="text-[8px] text-stone-400 italic text-center">+{totalCount - 4} mais</p>
                             )}
                           </div>
                         </div>
@@ -644,12 +749,17 @@ export const AgendaScreen: React.FC = () => {
             <div className="bg-white rounded-2xl border border-stone-200/60 shadow-sm divide-y divide-stone-100 overflow-hidden">
               <div className="p-4 bg-stone-50 border-b border-stone-100 flex items-center justify-between">
                 <span className="text-xs font-bold text-stone-500 uppercase tracking-wide">Agenda do Dia</span>
-                <span className="text-xs text-stone-500 font-medium"><b>{getDayAppointments(selectedDate).length}</b> atendimentos planejados</span>
+                <span className="text-xs text-stone-500 font-medium">
+                  <b>{getDayAppointments(selectedDate).length}</b> planejados
+                  {getDayExternalEvents(selectedDate).length > 0 && (
+                    <span className="text-blue-600 font-semibold"> • {getDayExternalEvents(selectedDate).length} externos pendentes</span>
+                  )}
+                </span>
               </div>
 
-              {getDayAppointments(selectedDate).length === 0 ? (
+              {getMergedDayItems(selectedDate).length === 0 ? (
                 <div className="p-12 text-center text-stone-400 italic text-sm">
-                  Nenhum atendimento agendado para esta data.
+                  Nenhum atendimento ou compromisso externo agendado para esta data.
                   <button 
                     onClick={() => handleOpenForm(null)}
                     className="block mt-3 mx-auto text-xs text-rose-600 hover:text-rose-700 font-bold cursor-pointer"
@@ -659,81 +769,126 @@ export const AgendaScreen: React.FC = () => {
                 </div>
               ) : (
                 <div className="divide-y divide-stone-100">
-                  {getDayAppointments(selectedDate)
-                    .sort((a, b) => a.hora.localeCompare(b.hora))
-                    .map((at) => (
-                      <div key={at.id} className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-stone-50/50 transition-all">
-                        {/* Time & Client details */}
-                        <div className="flex items-start gap-4">
-                          <div className="flex items-center gap-1.5 text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-100 px-3 py-1.5 rounded-xl shrink-0">
-                            <Clock className="w-4 h-4 text-rose-500" />
-                            {at.hora}
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <h3 className="font-semibold text-stone-900 text-base">{at.cliente?.nome || "Cliente avulso"}</h3>
-                              <span className={`px-2 py-0.5 text-[9px] font-bold uppercase rounded-full ${
-                                at.status === "Concluído" ? "bg-emerald-50 text-emerald-700 border border-emerald-100" :
-                                at.status === "Cancelado" ? "bg-red-50 text-red-600 border border-red-100" :
-                                "bg-amber-50 text-amber-700 border border-amber-100"
-                              }`}>
-                                {at.status}
-                              </span>
+                  {getMergedDayItems(selectedDate).map((item: any) => {
+                    if (item.isExternal) {
+                      return (
+                        <div key={item.id} className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 bg-blue-50/10 hover:bg-blue-50/30 transition-all">
+                          {/* Time & Event details */}
+                          <div className="flex items-start gap-4">
+                            <div className="flex items-center gap-1.5 text-sm font-semibold text-blue-700 bg-blue-50 border border-blue-100 px-3 py-1.5 rounded-xl shrink-0">
+                              <Clock className="w-4 h-4 text-blue-500" />
+                              {item.hora}
                             </div>
-                            <p className="text-xs font-medium text-stone-600 mt-1">
-                              Procedimento: <b>{getServicosNomes(at)}</b> • Duração: <b>{at.duracao} min</b>
-                            </p>
-                            {at.observacoes && (
-                              <p className="text-xs text-stone-400 mt-1 italic">Obs: {at.observacoes}</p>
-                            )}
+                            <div>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h3 className="font-semibold text-stone-900 text-base">{item.summary}</h3>
+                                <span className="px-2 py-0.5 text-[9px] font-bold uppercase rounded-full bg-blue-100 text-blue-800 border border-blue-200">
+                                  Compromisso Externo
+                                </span>
+                                <span className="px-2 py-0.5 text-[9px] font-bold uppercase rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                                  Pendente
+                                </span>
+                              </div>
+                              <p className="text-xs font-medium text-stone-600 mt-1">
+                                Sincronizado do Google Calendar • Duração aproximada: <b>{item.duracao} min</b>
+                              </p>
+                              {item.description && (
+                                <p className="text-xs text-stone-400 mt-1 italic max-w-xl truncate" title={item.description}>
+                                  Obs: {item.description}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Actions */}
+                          <div className="flex items-center justify-between md:justify-end gap-4 border-t md:border-t-0 pt-3 md:pt-0 border-stone-50">
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={() => handleOpenFinalizeExternalModal(item)}
+                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg shadow transition-colors cursor-pointer flex items-center gap-1"
+                              >
+                                <CheckCircle className="w-3.5 h-3.5" /> Finalizar Atendimento
+                              </button>
+                            </div>
                           </div>
                         </div>
-
-                        {/* Financial and actions */}
-                        <div className="flex items-center justify-between md:justify-end gap-4 border-t md:border-t-0 pt-3 md:pt-0 border-stone-50">
-                          <div className="text-right">
-                            <span className="text-xs text-stone-400 font-semibold block uppercase tracking-wider">Valor Cobrado</span>
-                            <span className="text-base font-bold text-stone-900">R$ {at.valor_cobrado.toFixed(2)}</span>
+                      );
+                    } else {
+                      const at = item as Atendimento;
+                      return (
+                        <div key={at.id} className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-stone-50/50 transition-all">
+                          {/* Time & Client details */}
+                          <div className="flex items-start gap-4">
+                            <div className="flex items-center gap-1.5 text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-100 px-3 py-1.5 rounded-xl shrink-0">
+                              <Clock className="w-4 h-4 text-rose-500" />
+                              {at.hora}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h3 className="font-semibold text-stone-900 text-base">{formatClienteNome(at.cliente?.nome)}</h3>
+                                <span className={`px-2 py-0.5 text-[9px] font-bold uppercase rounded-full ${
+                                  at.status === "Concluído" ? "bg-emerald-50 text-emerald-700 border border-emerald-100" :
+                                  at.status === "Cancelado" ? "bg-red-50 text-red-600 border-red-100" :
+                                  "bg-amber-50 text-amber-700 border border-amber-100"
+                                }`}>
+                                  {at.status}
+                                </span>
+                              </div>
+                              <p className="text-xs font-medium text-stone-600 mt-1">
+                                Procedimento: <b>{getServicosNomes(at)}</b> • Duração: <b>{at.duracao} min</b>
+                              </p>
+                              {at.observacoes && (
+                                <p className="text-xs text-stone-400 mt-1 italic">Obs: {at.observacoes}</p>
+                              )}
+                            </div>
                           </div>
 
-                          <div className="flex items-center gap-1.5">
-                            {at.status === "Agendado" && (
-                              <>
-                                <button
-                                  onClick={() => handleOpenCompleteModal(at)}
-                                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg shadow transition-colors cursor-pointer flex items-center gap-1"
-                                >
-                                  <CheckCircle className="w-3.5 h-3.5" /> Concluir
-                                </button>
-                                <button
-                                  onClick={() => handleCancelAppointment(at)}
-                                  className="p-1.5 text-stone-400 hover:text-red-600 hover:bg-stone-50 rounded-lg transition-colors cursor-pointer"
-                                  title="Cancelar Atendimento"
-                                >
-                                  <Ban className="w-4 h-4" />
-                                </button>
-                              </>
-                            )}
-                            <button
-                              onClick={() => handleOpenForm(at)}
-                              className="p-1.5 text-stone-400 hover:text-stone-900 hover:bg-stone-50 rounded-lg transition-colors cursor-pointer"
-                              title="Reagendar / Detalhes"
-                            >
-                              <ArrowLeftRight className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => handleDeleteAppointment(at.id)}
-                              className="p-1.5 text-stone-400 hover:text-red-600 hover:bg-stone-50 rounded-lg transition-colors cursor-pointer"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                          {/* Financial and actions */}
+                          <div className="flex items-center justify-between md:justify-end gap-4 border-t md:border-t-0 pt-3 md:pt-0 border-stone-50">
+                            <div className="text-right">
+                              <span className="text-xs text-stone-400 font-semibold block uppercase tracking-wider">Valor Cobrado</span>
+                              <span className="text-base font-bold text-stone-900">R$ {at.valor_cobrado.toFixed(2)}</span>
+                            </div>
+
+                            <div className="flex items-center gap-1.5">
+                              {at.status === "Agendado" && (
+                                <>
+                                  <button
+                                    onClick={() => handleOpenCompleteModal(at)}
+                                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg shadow transition-colors cursor-pointer flex items-center gap-1"
+                                  >
+                                    <CheckCircle className="w-3.5 h-3.5" /> Concluir
+                                  </button>
+                                  <button
+                                    onClick={() => handleCancelAppointment(at)}
+                                    className="p-1.5 text-stone-400 hover:text-red-600 hover:bg-stone-50 rounded-lg transition-colors cursor-pointer"
+                                    title="Cancelar Atendimento"
+                                  >
+                                    <Ban className="w-4 h-4" />
+                                  </button>
+                                </>
+                              )}
+                              <button
+                                onClick={() => handleOpenForm(at)}
+                                className="p-1.5 text-stone-400 hover:text-stone-900 hover:bg-stone-50 rounded-lg transition-colors cursor-pointer"
+                                title="Reagendar / Detalhes"
+                              >
+                                <ArrowLeftRight className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteAppointment(at.id)}
+                                className="p-1.5 text-stone-400 hover:text-red-600 hover:bg-stone-50 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    }
+                  })}
                 </div>
-              )}
-            </div>
+              )}     </div>
           )}
 
           {/* ==========================================
@@ -754,9 +909,9 @@ export const AgendaScreen: React.FC = () => {
                     upcomingAppointments.map(at => (
                       <div key={at.id} className="p-4 hover:bg-stone-50/30 flex items-center justify-between gap-4">
                         <div>
-                          <p className="text-xs font-bold text-stone-850">{at.cliente?.nome}</p>
+                          <p className="text-xs font-bold text-stone-850">{formatClienteNome(at.cliente?.nome)}</p>
                           <p className="text-[11px] text-stone-500 mt-0.5">
-                            {getServicosNomes(at)} • <b>{new Date(at.data).toLocaleDateString("pt-BR")} às {at.hora}</b>
+                            {getServicosNomes(at)} • <b>{new Date(at.data + "T12:00:00").toLocaleDateString("pt-BR")} às {at.hora}</b>
                           </p>
                         </div>
                         <span className="text-xs font-bold text-stone-700">R$ {at.valor_cobrado.toFixed(2)}</span>
@@ -779,9 +934,9 @@ export const AgendaScreen: React.FC = () => {
                     completedAppointments.map(at => (
                       <div key={at.id} className="p-4 hover:bg-stone-50/30 flex items-center justify-between gap-4">
                         <div>
-                          <p className="text-xs font-bold text-emerald-900">{at.cliente?.nome}</p>
+                          <p className="text-xs font-bold text-emerald-900">{formatClienteNome(at.cliente?.nome)}</p>
                           <p className="text-[11px] text-stone-500 mt-0.5">
-                            {getServicosNomes(at)} • Concluído em <b>{new Date(at.data).toLocaleDateString("pt-BR")}</b>
+                            {getServicosNomes(at)} • Concluído em <b>{new Date(at.data + "T12:00:00").toLocaleDateString("pt-BR")}</b>
                           </p>
                         </div>
                         <span className="text-xs font-bold text-emerald-700">R$ {at.valor_recebido.toFixed(2)}</span>

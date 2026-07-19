@@ -46,7 +46,8 @@ app.use((req, res, next) => {
 // Helper to initialize Supabase server-side client
 function getSupabase() {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
-  const key = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
+  // Check for service_role key to safely bypass RLS for server-side operations (like calendar sync)
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
   if (!url || !key) {
     const isProduction = process.env.NODE_ENV === "production";
     if (isProduction) {
@@ -488,6 +489,127 @@ app.post("/api/auth/google/sync-settings", async (req, res) => {
   res.json({ success: true, syncActive });
 });
 
+// 9.5 GET Google Calendar External Events (Pendente & contains "ATENDIMENTO")
+app.get("/api/calendar/external-events", async (req, res) => {
+  const { userId } = req.query;
+  if (!userId || typeof userId !== "string") {
+    return res.status(400).json({ error: "userId is required" });
+  }
+
+  try {
+    const supabase = getSupabase();
+    let connection = null;
+
+    if (supabase) {
+      connection = await getUserGoogleConnection(userId);
+    } else {
+      connection = demoGoogleConnections.get(userId);
+    }
+
+    if (!connection) {
+      return res.json({ success: true, connected: false, events: [] });
+    }
+
+    // List events from 30 days ago to 90 days in the future
+    const timeMin = new Date();
+    timeMin.setDate(timeMin.getDate() - 30);
+
+    let allEvents: any[] = [];
+    let pageToken = undefined;
+
+    while (true) {
+      const responseData = await listGoogleCalendarEvents(connection.access_token, {
+        timeMin: timeMin.toISOString(),
+        pageToken,
+      });
+
+      if (responseData.items) {
+        allEvents = allEvents.concat(responseData.items);
+      }
+
+      pageToken = responseData.nextPageToken;
+      if (!pageToken) {
+        break;
+      }
+    }
+
+    // Filter events that are not cancelled and contain "ATENDIMENTO" in summary or description
+    const filteredEvents = allEvents.filter((event: any) => {
+      if (event.status === "cancelled") return false;
+      const summary = event.summary || "";
+      const description = event.description || "";
+      return (
+        summary.toUpperCase().includes("ATENDIMENTO") ||
+        description.toUpperCase().includes("ATENDIMENTO")
+      );
+    });
+
+    // Fetch existing appointment google_event_ids to exclude already finalized/imported ones
+    let existingEventIds = new Set<string>();
+    if (supabase) {
+      const { data: appData, error: appError } = await supabase
+        .from("atendimentos")
+        .select("google_event_id")
+        .eq("user_id", userId)
+        .not("google_event_id", "is", null);
+
+      if (!appError && appData) {
+        appData.forEach((app: any) => {
+          if (app.google_event_id) {
+            existingEventIds.add(app.google_event_id);
+          }
+        });
+      }
+    }
+
+    // Map and return events that are not yet in our database
+    const pendingEvents = filteredEvents
+      .filter((event: any) => !existingEventIds.has(event.id))
+      .map((event: any) => {
+        let eventDate = "";
+        let eventTime = "08:00";
+        let durationMinutes = 30;
+
+        if (event.start?.dateTime) {
+          const startDt = new Date(event.start.dateTime);
+          const yyyy = startDt.getFullYear();
+          const mm = String(startDt.getMonth() + 1).padStart(2, "0");
+          const dd = String(startDt.getDate()).padStart(2, "0");
+          eventDate = `${yyyy}-${mm}-${dd}`;
+
+          const hh = String(startDt.getHours()).padStart(2, "0");
+          const min = String(startDt.getMinutes()).padStart(2, "0");
+          eventTime = `${hh}:${min}`;
+
+          if (event.end?.dateTime) {
+            const endDt = new Date(event.end.dateTime);
+            durationMinutes = Math.round((endDt.getTime() - startDt.getTime()) / 60000);
+            if (durationMinutes <= 0) durationMinutes = 30;
+          }
+        } else if (event.start?.date) {
+          eventDate = event.start.date;
+          eventTime = "08:00";
+          durationMinutes = 60;
+        }
+
+        return {
+          id: event.id,
+          summary: event.summary || "",
+          description: event.description || "",
+          data: eventDate,
+          hora: eventTime,
+          duracao: durationMinutes,
+          status: "Pendente",
+        };
+      });
+
+    res.json({ success: true, connected: true, events: pendingEvents });
+  } catch (err: any) {
+    console.error("Error fetching external Google Calendar events:", err);
+    res.status(500).json({ error: err.message || err });
+  }
+});
+
 // 10. Manual Calendar Sync trigger
 app.post("/api/calendar/sync", async (req, res) => {
   const { userId, forceFull } = req.body;
@@ -733,156 +855,9 @@ async function syncUserCalendar(userId: string, forceFull = false) {
           }
         }
       } else {
-        console.log(`[Google Calendar Sync] Inserting new appointment for event ${googleEventId}`);
-
-        let clientName = "";
-        let clientWhatsapp = "";
-
-        const clientMatch = eventDescription.match(/Cliente:\s*(.*)/i);
-        if (clientMatch && clientMatch[1]) {
-          clientName = clientMatch[1].trim();
-        }
-
-        const whatsappMatch = eventDescription.match(/WhatsApp:\s*(.*)/i);
-        if (whatsappMatch && whatsappMatch[1]) {
-          clientWhatsapp = whatsappMatch[1].trim();
-        }
-
-        if (!clientName) {
-          if (eventSummary.startsWith("Estética:")) {
-            clientName = eventSummary.substring("Estética:".length).trim();
-          } else {
-            clientName = eventSummary.trim();
-          }
-        }
-
-        if (!clientName) {
-          clientName = "Cliente do Google Agenda";
-        }
-
-        let matchedClient = clients.find(
-          c => c.nome.toLowerCase() === clientName.toLowerCase() ||
-          (clientWhatsapp && c.whatsapp === clientWhatsapp)
-        );
-
-        if (!matchedClient && supabase) {
-          console.log(`[Google Calendar Sync] Client "${clientName}" not found. Creating brand-new client.`);
-          const { data: newClient, error: clientErr } = await supabase
-            .from("clientes")
-            .insert({
-              user_id: userId,
-              nome: clientName,
-              whatsapp: clientWhatsapp,
-              ativo: true
-            })
-            .select()
-            .single();
-
-          if (clientErr) {
-            console.error("[Google Calendar Sync] Error creating client:", clientErr);
-          } else {
-            matchedClient = newClient;
-            clients.push(newClient);
-          }
-        }
-
-        const finalClientId = matchedClient?.id;
-        if (!finalClientId) {
-          console.error(`[Google Calendar Sync] Failed to obtain/create client for event ${googleEventId}`);
-          continue;
-        }
-
-        let matchedService = services.find(
-          s => eventSummary.toLowerCase().includes(s.nome.toLowerCase()) ||
-          eventDescription.toLowerCase().includes(s.nome.toLowerCase())
-        );
-
-        if (!matchedService && services.length > 0) {
-          matchedService = services[0];
-        }
-
-        if (!matchedService && supabase) {
-          console.log(`[Google Calendar Sync] Creating default service "Estética" for user ${userId}`);
-          const { data: newService, error: serviceErr } = await supabase
-            .from("servicos")
-            .insert({
-              user_id: userId,
-              nome: "Estética",
-              valor: 0.00,
-              custo: 0.00,
-              duracao: 30,
-            })
-            .select()
-            .single();
-
-          if (serviceErr) {
-            console.error("[Google Calendar Sync] Error creating default service:", serviceErr);
-          } else {
-            matchedService = newService;
-            services.push(newService);
-          }
-        }
-
-        const finalServiceId = matchedService?.id;
-        if (!finalServiceId) {
-          console.error(`[Google Calendar Sync] Failed to obtain/create service for event ${googleEventId}`);
-          continue;
-        }
-
-        const valorCobrado = matchedService ? Number(matchedService.valor) : 0;
-        const custo = matchedService ? Number(matchedService.custo) : 0;
-
-        const servicesDetails = matchedService ? [{
-          servico_id: matchedService.id,
-          nome: matchedService.nome,
-          valor: valorCobrado,
-          duracao: durationMinutes,
-          custo: custo
-        }] : [];
-
-        const newAppointment: any = {
-          user_id: userId,
-          cliente_id: finalClientId,
-          servico_id: finalServiceId,
-          data: eventDate,
-          hora: eventTime,
-          duracao: durationMinutes,
-          status: "Agendado",
-          valor_cobrado: valorCobrado,
-          forma_pagamento: "Pix",
-          lucro_liquido: valorCobrado - custo,
-          custo: custo,
-          observacoes: eventDescription,
-          google_event_id: googleEventId,
-          google_calendar_id: "primary",
-          google_last_sync: new Date().toISOString(),
-          google_sync_status: "synced",
-          servicos_detalhes: servicesDetails,
-        };
-
-        if (supabase) {
-          const { data: insertedApp, error: insertErr } = await supabase
-            .from("atendimentos")
-            .insert([newAppointment])
-            .select()
-            .single();
-
-          if (insertErr) {
-            console.error("[Google Calendar Sync] Error inserting appointment:", insertErr);
-          } else {
-            importedCount++;
-            if (servicesDetails.length > 0) {
-              const servicesToInsert = servicesDetails.map(s => ({
-                atendimento_id: insertedApp.id,
-                servico_id: s.servico_id,
-                valor_aplicado: s.valor,
-                custo_aplicado: s.custo,
-                duracao_aplicada: s.duracao
-              }));
-              await supabase.from("atendimento_servicos").insert(servicesToInsert);
-            }
-          }
-        }
+        // Under the new requirement, we do NOT auto-create clients, services, or appointments upon discovery.
+        // Instead, they are fetched dynamically via /api/calendar/external-events and shown in the UI.
+        console.log(`[Google Calendar Sync] Discovered new external event ${googleEventId}, skipping auto-import.`);
       }
     }
 

@@ -13,17 +13,23 @@ import { FinanceiroScreen } from "./components/FinanceiroScreen.js";
 import { ServicosScreen } from "./components/ServicosScreen.js";
 import { GoogleCalendarConfig } from "./components/GoogleCalendarConfig.js";
 import { UsersManagementScreen } from "./components/UsersManagementScreen.js";
+import { MyAccountScreen } from "./components/MyAccountScreen.js";
+import { SaaSStatusGate } from "./components/SaaSStatusGate.js";
+import { ForcePasswordChangeScreen } from "./components/ForcePasswordChangeScreen.js";
+import { LumoraLogo } from "./components/LumoraLogo";
 import { motion, AnimatePresence } from "motion/react";
 import { 
-  LayoutDashboard, Users, CalendarDays, DollarSign, Sparkles, Settings, LogOut, Menu, X, BookOpen, AlertCircle, Shield
+  LayoutDashboard, Users, CalendarDays, DollarSign, Sparkles, Settings, LogOut, Menu, X, BookOpen, AlertCircle, Shield, User
 } from "lucide-react";
 
-type ActiveTab = "dashboard" | "agenda" | "clientes" | "financeiro" | "servicos" | "config" | "users";
+type ActiveTab = "dashboard" | "agenda" | "clientes" | "financeiro" | "servicos" | "config" | "users" | "profile";
 
 const Layout: React.FC = () => {
-  const { user, logout } = useAuth();
+  const { user, logout, resendConfirmationEmail } = useAuth();
   const [activeTab, setActiveTab] = useState<ActiveTab>("dashboard");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [resendingEmail, setResendingEmail] = useState(false);
+  const [resendSuccess, setResendSuccess] = useState(false);
 
   const menuItems = [
     { id: "dashboard" as ActiveTab, label: "Painel Geral", icon: LayoutDashboard },
@@ -31,11 +37,12 @@ const Layout: React.FC = () => {
     { id: "clientes" as ActiveTab, label: "Clientes", icon: Users },
     { id: "financeiro" as ActiveTab, label: "Financeiro", icon: DollarSign },
     { id: "servicos" as ActiveTab, label: "Serviços", icon: BookOpen },
+    { id: "profile" as ActiveTab, label: "Minha Conta", icon: User },
     { id: "config" as ActiveTab, label: "Integrações", icon: Settings },
   ];
 
   if (user?.role === "master") {
-    menuItems.push({ id: "users" as ActiveTab, label: "Gerenciar Usuários", icon: Shield });
+    menuItems.push({ id: "users" as ActiveTab, label: "Painel MASTER", icon: Shield });
   }
 
   const renderActiveScreen = () => {
@@ -50,6 +57,8 @@ const Layout: React.FC = () => {
         return <FinanceiroScreen />;
       case "servicos":
         return <ServicosScreen />;
+      case "profile":
+        return <MyAccountScreen />;
       case "config":
         return <GoogleCalendarConfig />;
       case "users":
@@ -61,7 +70,21 @@ const Layout: React.FC = () => {
 
   const getPageTitle = () => {
     const matched = menuItems.find(item => item.id === activeTab);
-    return matched ? matched.label : "PKM Embelezamento";
+    return matched ? matched.label : "LUMORA Flow";
+  };
+
+  const handleResendEmail = async () => {
+    if (!user?.email) return;
+    setResendingEmail(true);
+    try {
+      await resendConfirmationEmail(user.email);
+      setResendSuccess(true);
+      setTimeout(() => setResendSuccess(false), 5000);
+    } catch (e) {
+      console.error("Error resending email:", e);
+    } finally {
+      setResendingEmail(false);
+    }
   };
 
   return (
@@ -73,11 +96,9 @@ const Layout: React.FC = () => {
         <div className="flex flex-col overflow-y-auto">
           {/* Logo Header */}
           <div className="p-6 border-b border-stone-850 flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full bg-rose-600 flex items-center justify-center shadow-md">
-              <Sparkles className="w-5 h-5 text-white" />
-            </div>
+            <LumoraLogo size="sm" showBg={true} />
             <div>
-              <h2 className="font-serif font-semibold tracking-tight text-stone-100 text-base leading-tight">PKM Embelezamento</h2>
+              <h2 className="font-serif font-semibold tracking-tight text-stone-100 text-base leading-tight">LUMORA Flow</h2>
               <span className="text-[10px] text-stone-400 font-bold uppercase tracking-widest mt-0.5 block">Gestão Estética</span>
             </div>
           </div>
@@ -107,15 +128,22 @@ const Layout: React.FC = () => {
 
         {/* User profile section footer */}
         <div className="p-4 border-t border-stone-850 space-y-3 bg-stone-950/40">
-          <div className="flex items-center gap-3 px-2">
-            <div className="w-9 h-9 rounded-full bg-stone-800 border border-stone-750 flex items-center justify-center font-bold text-sm text-rose-500 uppercase">
-              {user?.nome.charAt(0)}
+          <button
+            onClick={() => setActiveTab("profile")}
+            className="flex items-center gap-3 px-2 w-full text-left cursor-pointer hover:bg-stone-850/50 p-2 rounded-xl transition-all"
+          >
+            <div className="w-9 h-9 rounded-full overflow-hidden bg-stone-800 border border-stone-750 flex items-center justify-center font-bold text-sm text-rose-500 uppercase">
+              {user?.foto_url ? (
+                <img src={user.foto_url} alt={user.nome} className="w-full h-full object-cover" />
+              ) : (
+                user?.nome.charAt(0)
+              )}
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-xs font-semibold text-stone-200 truncate">{user?.nome}</p>
               <p className="text-[10px] text-stone-500 truncate">{user?.email}</p>
             </div>
-          </div>
+          </button>
 
           <button
             onClick={logout}
@@ -132,16 +160,21 @@ const Layout: React.FC = () => {
           ========================================== */}
       <header className="md:hidden bg-stone-900 text-white p-4 sticky top-0 z-40 flex items-center justify-between border-b border-stone-850 shadow-sm">
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-full bg-rose-600 flex items-center justify-center">
-            <Sparkles className="w-4 h-4 text-white" />
-          </div>
+          <LumoraLogo size="sm" showBg={true} />
           <span className="font-serif font-semibold text-stone-100 text-sm tracking-tight">{getPageTitle()}</span>
         </div>
 
         <div className="flex items-center gap-3">
-          <div className="w-7 h-7 rounded-full bg-stone-800 border border-stone-700 flex items-center justify-center text-xs text-rose-500 font-bold uppercase">
-            {user?.nome.charAt(0)}
-          </div>
+          <button
+            onClick={() => setActiveTab("profile")}
+            className="w-7 h-7 rounded-full overflow-hidden bg-stone-800 border border-stone-700 flex items-center justify-center text-xs text-rose-500 font-bold uppercase cursor-pointer"
+          >
+            {user?.foto_url ? (
+              <img src={user.foto_url} alt={user.nome} className="w-full h-full object-cover" />
+            ) : (
+              user?.nome.charAt(0)
+            )}
+          </button>
           <button 
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
             className="p-1.5 hover:bg-stone-800 rounded-lg text-stone-300 transition-colors cursor-pointer"
@@ -169,9 +202,24 @@ const Layout: React.FC = () => {
               animate={{ x: 0 }}
               exit={{ x: "100%" }}
               transition={{ type: "spring", bounce: 0, duration: 0.3 }}
-              className="fixed right-0 top-0 bottom-0 w-64 bg-stone-900 text-white z-40 p-4 flex flex-col justify-between shadow-2xl md:hidden"
+              className="fixed right-0 top-0 bottom-0 w-64 bg-stone-900 text-white z-40 p-4 flex flex-col shadow-2xl md:hidden h-full max-h-screen overflow-hidden"
             >
-              <div className="space-y-6 pt-12">
+              {/* Header inside drawer */}
+              <div className="flex items-center justify-between pb-4 border-b border-stone-850 mt-1 mb-4">
+                <div className="flex items-center gap-2">
+                  <LumoraLogo size="sm" showBg={true} />
+                  <span className="font-serif font-semibold text-xs text-stone-200">LUMORA Flow</span>
+                </div>
+                <button 
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="p-1 hover:bg-stone-800 rounded-lg text-stone-400 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Scrollable Nav Items */}
+              <div className="flex-1 overflow-y-auto space-y-4 pr-1">
                 <nav className="space-y-1.5">
                   {menuItems.map((item) => {
                     const Icon = item.icon;
@@ -197,22 +245,36 @@ const Layout: React.FC = () => {
                 </nav>
               </div>
 
-              <div className="space-y-4 border-t border-stone-850 pt-4">
-                <div className="flex items-center gap-3 px-2">
-                  <div className="w-8 h-8 rounded-full bg-stone-800 text-rose-500 flex items-center justify-center font-bold text-xs uppercase border border-stone-700">
-                    {user?.nome.charAt(0)}
+              {/* Fixed Bottom Profile & Logout block */}
+              <div className="space-y-3.5 border-t border-stone-850 pt-4 mt-auto">
+                <button
+                  onClick={() => {
+                    setActiveTab("profile");
+                    setMobileMenuOpen(false);
+                  }}
+                  className="flex items-center gap-3 px-2 w-full text-left"
+                >
+                  <div className="w-8 h-8 rounded-full overflow-hidden bg-stone-800 text-rose-500 flex items-center justify-center font-bold text-xs uppercase border border-stone-700 shrink-0">
+                    {user?.foto_url ? (
+                      <img src={user.foto_url} alt={user.nome} className="w-full h-full object-cover" />
+                    ) : (
+                      user?.nome.charAt(0)
+                    )}
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-semibold text-stone-200 truncate">{user?.nome}</p>
                     <p className="text-[10px] text-stone-500 truncate">{user?.email}</p>
                   </div>
-                </div>
+                </button>
                 <button
-                  onClick={logout}
-                  className="w-full flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold text-stone-400 hover:text-red-400 hover:bg-red-950/20 transition-all cursor-pointer"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    logout();
+                  }}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-xs font-bold text-red-400 bg-red-950/20 border border-red-900/30 hover:bg-red-950/40 transition-all cursor-pointer"
                 >
-                  <LogOut className="w-4 h-4 shrink-0" />
-                  Sair da Conta
+                  <LogOut className="w-4 h-4 shrink-0 text-red-500" />
+                  Sair do Painel
                 </button>
               </div>
             </motion.div>
@@ -223,19 +285,42 @@ const Layout: React.FC = () => {
       {/* ==========================================
           MAIN PORTAL VIEW CONTAINER
           ========================================== */}
-      <main className="flex-1 p-4 sm:p-6 lg:p-8 pb-24 md:pb-8 overflow-x-hidden">
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={activeTab}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.25 }}
-          >
-            {renderActiveScreen()}
-          </motion.div>
-        </AnimatePresence>
-      </main>
+      <div className="flex-1 flex flex-col min-w-0 overflow-x-hidden">
+        
+        {/* Email verification alert warning */}
+        {user && !user.email_confirmado && user.role !== "master" && (
+          <div className="bg-amber-50 border-b border-amber-200 px-4 py-3 text-amber-900 text-xs flex flex-wrap items-center justify-between gap-3 font-medium transition-all">
+            <div className="flex items-center gap-2.5">
+              <AlertCircle className="w-4.5 h-4.5 text-amber-600 shrink-0" />
+              <span>
+                Seu endereço de e-mail <strong>{user.email}</strong> ainda não está confirmado. Confirme seu e-mail para usufruir de todas as garantias.
+              </span>
+            </div>
+            
+            <button
+              onClick={handleResendEmail}
+              disabled={resendingEmail || resendSuccess}
+              className="bg-amber-600 text-white font-bold text-[10px] px-3.5 py-1.5 rounded-lg hover:bg-amber-700 transition-all cursor-pointer disabled:bg-stone-300 disabled:cursor-not-allowed"
+            >
+              {resendingEmail ? "Enviando..." : (resendSuccess ? "Enviado com Sucesso!" : "Reenviar E-mail de Ativação")}
+            </button>
+          </div>
+        )}
+
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 pb-24 md:pb-8 overflow-x-hidden">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activeTab}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.25 }}
+            >
+              {renderActiveScreen()}
+            </motion.div>
+          </AnimatePresence>
+        </main>
+      </div>
 
       {/* ==========================================
           MOBILE BOTTOM NAVIGATION (Touch Target >= 44px)
@@ -256,11 +341,11 @@ const Layout: React.FC = () => {
           );
         })}
         <button
-          onClick={() => setActiveTab("config")}
+          onClick={() => setActiveTab("profile")}
           className="flex flex-col items-center justify-center min-h-[48px] min-w-[48px] py-1.5 px-3 rounded-xl cursor-pointer"
         >
-          <Settings className={`w-5 h-5 ${activeTab === 'config' ? 'text-rose-600 font-bold scale-110' : 'text-stone-400'}`} />
-          <span className={`text-[9px] mt-1 font-bold ${activeTab === 'config' ? 'text-rose-600' : 'text-stone-450'}`}>Config</span>
+          <User className={`w-5 h-5 ${activeTab === 'profile' ? 'text-rose-600 font-bold scale-110' : 'text-stone-400'}`} />
+          <span className={`text-[9px] mt-1 font-bold ${activeTab === 'profile' ? 'text-rose-600' : 'text-stone-450'}`}>Conta</span>
         </button>
       </nav>
     </div>
@@ -283,6 +368,18 @@ const AuthGate: React.FC = () => {
 
   if (!user) {
     return <AuthScreen />;
+  }
+
+  if (user.must_change_password) {
+    return <ForcePasswordChangeScreen />;
+  }
+
+  // STATUS ACCESS CONTROL / SaaS Gating
+  const isMaster = user.role === "master";
+  const isSubscriptionActive = user.status === "Assinatura Ativa";
+  
+  if (!isMaster && !isSubscriptionActive) {
+    return <SaaSStatusGate />;
   }
 
   return <Layout />;

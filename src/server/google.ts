@@ -8,7 +8,7 @@ import { createClient } from "@supabase/supabase-js";
 // Helper to initialize Supabase server-side client
 function getSupabaseClient() {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
-  const key = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
   if (!url || !key) {
     const isProduction = process.env.NODE_ENV === "production";
     if (isProduction) {

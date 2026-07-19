@@ -30,10 +30,9 @@ export const ClientesScreen: React.FC = () => {
   const [email, setEmail] = useState("");
   const [endereco, setEndereco] = useState("");
   const [observacoes, setObservacoes] = useState("");
-  const [fotoAntes, setFotoAntes] = useState("");
-  const [fotoDepois, setFotoDepois] = useState("");
   const [ativo, setAtivo] = useState(true);
   const [editId, setEditId] = useState<string | null>(null);
+  const [deleteClienteId, setDeleteClienteId] = useState<string | null>(null);
 
   useEffect(() => {
     loadData();
@@ -97,8 +96,6 @@ export const ClientesScreen: React.FC = () => {
       setEmail(cli.email || "");
       setEndereco(cli.endereco || "");
       setObservacoes(cli.observacoes || "");
-      setFotoAntes(cli.foto_antes || "");
-      setFotoDepois(cli.foto_depois || "");
       setAtivo(cli.ativo);
     } else {
       setEditId(null);
@@ -109,8 +106,6 @@ export const ClientesScreen: React.FC = () => {
       setEmail("");
       setEndereco("");
       setObservacoes("");
-      setFotoAntes("");
-      setFotoDepois("");
       setAtivo(true);
     }
     setIsFormOpen(true);
@@ -119,22 +114,6 @@ export const ClientesScreen: React.FC = () => {
   const handleCloseForm = () => {
     setIsFormOpen(false);
     setEditId(null);
-  };
-
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>, type: "antes" | "depois") => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const base64String = reader.result as string;
-      if (type === "antes") {
-        setFotoAntes(base64String);
-      } else {
-        setFotoDepois(base64String);
-      }
-    };
-    reader.readAsDataURL(file);
   };
 
   const parseAndNormalizeDate = (dateStr: string): string | null => {
@@ -203,8 +182,6 @@ export const ClientesScreen: React.FC = () => {
       email,
       endereco,
       observacoes,
-      foto_antes: fotoAntes,
-      foto_depois: fotoDepois,
       ativo
     };
 
@@ -243,19 +220,37 @@ export const ClientesScreen: React.FC = () => {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    const confirmed = window.confirm("Tem certeza que deseja excluir este cliente? Todos os atendimentos associados a ele também serão excluídos!");
-    if (!confirmed) return;
+  const handleDelete = (id: string) => {
+    setDeleteClienteId(id);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteClienteId) return;
 
     try {
-      await databaseService.deleteCliente(id);
+      await databaseService.deleteCliente(deleteClienteId);
       loadData();
-      if (selectedCliente?.id === id) {
+      if (selectedCliente?.id === deleteClienteId) {
         setIsDetailsOpen(false);
       }
-    } catch (err) {
+      setDeleteClienteId(null);
+    } catch (err: any) {
       console.error("Erro ao excluir cliente", err);
-      alert("Erro ao excluir cliente.");
+      
+      const supabaseMsg = err?.message || "Erro desconhecido";
+      const supabaseCode = err?.code || "N/A";
+      const supabaseDetails = err?.details || "N/A";
+      const supabaseHint = err?.hint || "N/A";
+      
+      const detailedError = `Erro ao excluir o cliente.\n\n` +
+        `- Mensagem: ${supabaseMsg}\n` +
+        `- Código do Erro: ${supabaseCode}\n` +
+        `- Detalhes: ${supabaseDetails}\n` +
+        `- Hint: ${supabaseHint}\n\n` +
+        `Isso pode indicar que você não possui permissão (RLS) para apagar este registro ou ocorreu algum problema temporário no banco de dados.`;
+        
+      alert(detailedError);
+      setDeleteClienteId(null);
     }
   };
 
@@ -265,10 +260,12 @@ export const ClientesScreen: React.FC = () => {
   };
 
   const filteredClientes = clientes.filter(cli => 
-    cli.nome.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    cli.telefone.includes(searchTerm) ||
-    cli.whatsapp.includes(searchTerm) ||
-    (cli.email && cli.email.toLowerCase().includes(searchTerm.toLowerCase()))
+    !cli.nome.startsWith("[EXCLUÍDO] ") && (
+      cli.nome.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      cli.telefone.includes(searchTerm) ||
+      cli.whatsapp.includes(searchTerm) ||
+      (cli.email && cli.email.toLowerCase().includes(searchTerm.toLowerCase()))
+    )
   );
 
   const getHistoryOfClient = (clientId: string) => {
@@ -367,31 +364,13 @@ export const ClientesScreen: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Quick Info & Photos Preview */}
+                {/* Quick Info */}
                 <div className="px-5 pb-3 pt-1 border-t border-stone-50 flex items-center justify-between text-xs text-stone-500">
                   <span>Atendimentos: <b>{clientHistory.length}</b></span>
                   {cli.data_nascimento && (
-                    <span>Nasc: <b>{new Date(cli.data_nascimento).toLocaleDateString("pt-BR")}</b></span>
+                    <span>Nasc: <b>{new Date(cli.data_nascimento + "T12:00:00").toLocaleDateString("pt-BR")}</b></span>
                   )}
                 </div>
-
-                {/* Photos strip */}
-                {(cli.foto_antes || cli.foto_depois) && (
-                  <div className="px-5 py-2 bg-stone-50/50 border-y border-stone-100 flex gap-2">
-                    {cli.foto_antes && (
-                      <div className="relative group overflow-hidden rounded-md border border-stone-200">
-                        <img src={cli.foto_antes} className="w-10 h-10 object-cover" alt="Antes" />
-                        <span className="absolute bottom-0 inset-x-0 bg-stone-900/60 text-[8px] text-white text-center py-0.5">Antes</span>
-                      </div>
-                    )}
-                    {cli.foto_depois && (
-                      <div className="relative group overflow-hidden rounded-md border border-stone-200">
-                        <img src={cli.foto_depois} className="w-10 h-10 object-cover" alt="Depois" />
-                        <span className="absolute bottom-0 inset-x-0 bg-rose-900/60 text-[8px] text-white text-center py-0.5">Depois</span>
-                      </div>
-                    )}
-                  </div>
-                )}
 
                 {/* Actions */}
                 <div className="p-4 bg-stone-50/70 border-t border-stone-100 flex items-center justify-end gap-2">
@@ -455,7 +434,7 @@ export const ClientesScreen: React.FC = () => {
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-sm text-stone-700">
                     <Calendar className="w-4 h-4 text-stone-400" />
-                    <span>Nascimento: <b>{selectedCliente.data_nascimento ? new Date(selectedCliente.data_nascimento).toLocaleDateString("pt-BR") : "Não informada"}</b></span>
+                    <span>Nascimento: <b>{selectedCliente.data_nascimento ? new Date(selectedCliente.data_nascimento + "T12:00:00").toLocaleDateString("pt-BR") : "Não informada"}</b></span>
                   </div>
                   <div className="flex items-center gap-2 text-sm text-stone-700">
                     <MapPin className="w-4 h-4 text-stone-400" />
@@ -464,37 +443,7 @@ export const ClientesScreen: React.FC = () => {
                 </div>
               </div>
 
-              {/* Photos Gallery */}
-              <div className="space-y-3">
-                <h3 className="font-serif text-lg font-medium text-stone-800 border-b border-stone-100 pb-1 flex items-center gap-2">
-                  <Camera className="w-5 h-5 text-rose-500" /> Evolução de Procedimento
-                </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* Antes */}
-                  <div className="border border-stone-200/80 rounded-xl p-3 bg-stone-50 flex flex-col items-center justify-center">
-                    <span className="text-xs font-semibold text-stone-500 mb-2 uppercase">Antes do procedimento</span>
-                    {selectedCliente.foto_antes ? (
-                      <img src={selectedCliente.foto_antes} className="h-44 w-full object-cover rounded-lg border border-stone-200 shadow-inner" alt="Antes" />
-                    ) : (
-                      <div className="h-44 w-full rounded-lg bg-stone-100 border-2 border-dashed border-stone-200 flex items-center justify-center text-xs text-stone-400">
-                        Sem foto de "Antes" registrada
-                      </div>
-                    )}
-                  </div>
 
-                  {/* Depois */}
-                  <div className="border border-stone-200/80 rounded-xl p-3 bg-stone-50 flex flex-col items-center justify-center">
-                    <span className="text-xs font-semibold text-rose-600 mb-2 uppercase">Depois do procedimento</span>
-                    {selectedCliente.foto_depois ? (
-                      <img src={selectedCliente.foto_depois} className="h-44 w-full object-cover rounded-lg border border-stone-200 shadow-inner" alt="Depois" />
-                    ) : (
-                      <div className="h-44 w-full rounded-lg bg-stone-100 border-2 border-dashed border-stone-200 flex items-center justify-center text-xs text-stone-400">
-                        Sem foto de "Depois" registrada
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
 
               {/* Observations */}
               {selectedCliente.observacoes && (
@@ -518,7 +467,7 @@ export const ClientesScreen: React.FC = () => {
                         <div>
                           <p className="text-sm font-semibold text-stone-800">{getServicosNomes(at)}</p>
                           <p className="text-xs text-stone-500 mt-0.5">
-                            Data: <b>{new Date(at.data).toLocaleDateString("pt-BR")} às {at.hora}</b> • Duração: <b>{at.duracao} min</b>
+                            Data: <b>{new Date(at.data + "T12:00:00").toLocaleDateString("pt-BR")} às {at.hora}</b> • Duração: <b>{at.duracao} min</b>
                           </p>
                           {at.observacoes && (
                             <p className="text-xs text-stone-400 mt-1 italic">Obs: {at.observacoes}</p>
@@ -655,58 +604,7 @@ export const ClientesScreen: React.FC = () => {
                 />
               </div>
 
-              {/* Photos Capture / Upload in base64 */}
-              <div className="grid grid-cols-2 gap-4 border-t border-stone-100 pt-3">
-                <div>
-                  <label className="block text-xs font-bold text-stone-700 tracking-wide uppercase mb-1 flex items-center gap-1">
-                    <Camera className="w-3.5 h-3.5" /> Foto Antes
-                  </label>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => handlePhotoUpload(e, "antes")}
-                    className="hidden"
-                    id="upload-antes"
-                  />
-                  <label
-                    htmlFor="upload-antes"
-                    className="block w-full border border-dashed border-stone-300 rounded-xl p-2 text-center bg-stone-50 hover:bg-stone-100/50 cursor-pointer text-xs font-medium text-stone-600 hover:border-stone-400 transition-colors"
-                  >
-                    {fotoAntes ? "Alterar Foto Antes" : "Enviar Foto Antes"}
-                  </label>
-                  {fotoAntes && (
-                    <div className="mt-2 relative">
-                      <img src={fotoAntes} className="h-20 w-full object-cover rounded-lg border" alt="Antes" />
-                      <button type="button" onClick={() => setFotoAntes("")} className="absolute top-1 right-1 p-0.5 bg-red-600 text-white rounded-full"><X className="w-3 h-3" /></button>
-                    </div>
-                  )}
-                </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-stone-700 tracking-wide uppercase mb-1 flex items-center gap-1">
-                    <Camera className="w-3.5 h-3.5" /> Foto Depois
-                  </label>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => handlePhotoUpload(e, "depois")}
-                    className="hidden"
-                    id="upload-depois"
-                  />
-                  <label
-                    htmlFor="upload-depois"
-                    className="block w-full border border-dashed border-stone-300 rounded-xl p-2 text-center bg-stone-50 hover:bg-stone-100/50 cursor-pointer text-xs font-medium text-stone-600 hover:border-stone-400 transition-colors"
-                  >
-                    {fotoDepois ? "Alterar Foto Depois" : "Enviar Foto Depois"}
-                  </label>
-                  {fotoDepois && (
-                    <div className="mt-2 relative">
-                      <img src={fotoDepois} className="h-20 w-full object-cover rounded-lg border" alt="Depois" />
-                      <button type="button" onClick={() => setFotoDepois("")} className="absolute top-1 right-1 p-0.5 bg-red-600 text-white rounded-full"><X className="w-3 h-3" /></button>
-                    </div>
-                  )}
-                </div>
-              </div>
 
               {/* Ativo toggle */}
               <div className="flex items-center justify-between border-t border-stone-100 pt-3">
@@ -739,6 +637,44 @@ export const ClientesScreen: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE CONFIRMATION MODAL */}
+      {deleteClienteId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-xl border border-stone-100 p-6 space-y-4">
+            <div className="flex items-center gap-3 text-red-600">
+              <AlertCircle className="w-6 h-6 shrink-0" />
+              <h3 className="font-serif text-lg font-bold">Confirmar Exclusão</h3>
+            </div>
+            <p className="text-sm text-stone-600 leading-relaxed">
+              Tem certeza que deseja excluir o(a) cliente{" "}
+              <strong className="text-stone-900 font-bold">
+                {clientes.find((c) => c.id === deleteClienteId)?.nome || "este cliente"}
+              </strong>
+              ?
+            </p>
+            <p className="text-xs text-stone-600 bg-stone-50 p-3 rounded-lg border border-stone-200 font-medium leading-relaxed">
+              Nota: Para manter o histórico de faturamento e agendamentos intacto nas suas finanças e relatórios, o(a) cliente será ocultado(a) de todas as listas e do agendamento, mas os atendimentos passados correspondentes serão preservados perfeitamente.
+            </p>
+            <div className="flex justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteClienteId(null)}
+                className="px-4 py-2 bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg shadow-md transition-all cursor-pointer"
+              >
+                Excluir Permanentemente
+              </button>
+            </div>
           </div>
         </div>
       )}

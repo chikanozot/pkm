@@ -67,6 +67,28 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
 
   useEffect(() => {
     loadData();
+    if (user) {
+      const syncCalendar = async () => {
+        try {
+          const res = await fetch("/api/calendar/sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userId: user.id }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success && (data.imported > 0 || data.updated > 0 || data.cancelled > 0)) {
+              console.log(`[Google Sync] Importados: ${data.imported}, Atualizados: ${data.updated}, Cancelados: ${data.cancelled}`);
+              const dataAt = await databaseService.getAtendimentos(user.id, user.role);
+              setAtendimentos(dataAt);
+            }
+          }
+        } catch (e) {
+          console.error("Erro na sincronização automática do Google Calendar:", e);
+        }
+      };
+      syncCalendar();
+    }
   }, [user]);
 
   useEffect(() => {
@@ -107,7 +129,19 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
     }
   };
 
+  const formatClienteNome = (nome?: string) => {
+    if (!nome) return "Cliente Avulso";
+    return nome.replace(/^\[EXCLUÍDO\]\s*/i, "");
+  };
+
   // Helper date logic
+  const parseLocal = (dateStr: string, timeStr?: string) => {
+    if (!dateStr) return new Date();
+    const [year, month, day] = dateStr.split("-").map(Number);
+    const [hours, minutes] = (timeStr || "12:00").split(":").map(Number);
+    return new Date(year, month - 1, day, hours, minutes || 0, 0);
+  };
+
   const getTodayDateStr = () => {
     const d = new Date();
     const year = d.getFullYear();
@@ -118,13 +152,13 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
 
   const isAppointmentDelayed = (at: Atendimento) => {
     const now = new Date();
-    const start = new Date(`${at.data}T${at.hora}:00`);
+    const start = parseLocal(at.data, at.hora);
     const end = new Date(start.getTime() + (at.duracao || 30) * 60 * 1000);
     return now.getTime() > end.getTime();
   };
 
   const getRelativeTimeString = (dateStr: string, timeStr: string) => {
-    const aptDate = new Date(`${dateStr}T${timeStr}:00`);
+    const aptDate = parseLocal(dateStr, timeStr);
     const now = new Date();
     const diffMs = aptDate.getTime() - now.getTime();
     
@@ -158,31 +192,26 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
     return atendimentos
       .filter(at => {
         if (at.status !== "Agendado") return false;
-        const aptDate = new Date(`${at.data}T${at.hora}:00`);
+        const aptDate = parseLocal(at.data, at.hora);
         return aptDate.getTime() > now.getTime();
       })
       .sort((a, b) => {
-        const dateA = new Date(`${a.data}T${a.hora}:00`);
-        const dateB = new Date(`${b.data}T${b.hora}:00`);
+        const dateA = parseLocal(a.data, a.hora);
+        const dateB = parseLocal(b.data, b.hora);
         return dateA.getTime() - dateB.getTime();
       })
       .slice(0, 3);
   };
 
   const getPastAppointments = () => {
-    const now = new Date();
     return atendimentos
-      .filter(at => {
-        if (at.status === "Concluído" || at.status === "Cancelado") return true;
-        const aptDate = new Date(`${at.data}T${at.hora}:00`);
-        return aptDate.getTime() <= now.getTime();
-      })
+      .filter(at => at.status === "Concluído")
       .sort((a, b) => {
-        const dateA = new Date(`${a.data}T${a.hora}:00`);
-        const dateB = new Date(`${b.data}T${b.hora}:00`);
+        const dateA = parseLocal(a.data, a.hora);
+        const dateB = parseLocal(b.data, b.hora);
         return dateB.getTime() - dateA.getTime();
       })
-      .slice(0, 2);
+      .slice(0, 5);
   };
 
   const getIncompleteOrActiveAppointments = () => {
@@ -190,12 +219,12 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
     return atendimentos
       .filter(at => {
         if (at.status !== "Agendado") return false;
-        const aptDate = new Date(`${at.data}T${at.hora}:00`);
+        const aptDate = parseLocal(at.data, at.hora);
         return aptDate.getTime() <= now.getTime();
       })
       .sort((a, b) => {
-        const dateA = new Date(`${a.data}T${a.hora}:00`);
-        const dateB = new Date(`${b.data}T${b.hora}:00`);
+        const dateA = parseLocal(a.data, a.hora);
+        const dateB = parseLocal(b.data, b.hora);
         return dateA.getTime() - dateB.getTime();
       });
   };
@@ -482,7 +511,7 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
     doc.text("DEMONSTRATIVO DETALHADO DE DESPESAS", 15, (doc as any).lastAutoTable.finalY + 15);
 
     const despesasRows = activeDespesas.map(d => [
-      new Date(d.data).toLocaleDateString("pt-BR"),
+      new Date(d.data + "T12:00:00").toLocaleDateString("pt-BR"),
       d.categoria,
       d.descricao,
       d.forma_pagamento,
@@ -505,8 +534,8 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
     const receitasRows = activeAtendimentos
       .filter(at => at.status === "Concluído" && at.pago)
       .map(at => [
-        new Date(at.data).toLocaleDateString("pt-BR"),
-        at.cliente?.nome || "Cliente Avulso",
+        new Date(at.data + "T12:00:00").toLocaleDateString("pt-BR"),
+        formatClienteNome(at.cliente?.nome),
         getServicosNomes(at),
         at.forma_pagamento || "Pix",
         `R$ ${at.valor_recebido.toFixed(2)}`
@@ -537,7 +566,7 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
   const incompleteApts = getIncompleteOrActiveAppointments();
 
   const nextAptStr = upcomingApts.length > 0 
-    ? `${upcomingApts[0].cliente?.nome || "Cliente"} - ${upcomingApts[0].hora}`
+    ? `${formatClienteNome(upcomingApts[0].cliente?.nome)} - ${upcomingApts[0].hora}`
     : "Nenhum";
 
   const revenueToday = todayApts
@@ -569,7 +598,7 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
         <div>
           <div className="flex items-center gap-2">
             <span className="text-xs font-bold text-rose-600 uppercase tracking-wide flex items-center gap-1">
-              <Sparkles className="w-3.5 h-3.5" /> Visão Geral - PKM Embelezamento
+              <Sparkles className="w-3.5 h-3.5" /> Visão Geral - LUMORA Flow
             </span>
           </div>
           <h1 className="font-serif text-3xl font-medium text-stone-900 mt-1">Olá, {user?.nome || "Profissional"}</h1>
@@ -693,7 +722,7 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
                           </span>
                         )}
                         <h3 className="font-serif text-base font-bold leading-tight">
-                          {at.cliente?.nome || "Cliente avulso"}
+                          {formatClienteNome(at.cliente?.nome)}
                         </h3>
                       </div>
                       <span className="text-xs font-semibold px-2 py-0.5 rounded-md bg-stone-100 text-stone-700 font-mono">
@@ -777,7 +806,7 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
                         <span className="text-[8px] font-semibold text-stone-400 uppercase">Tempo</span>
                       </div>
                       <div>
-                        <h4 className="text-xs font-bold text-stone-850 truncate max-w-[150px]">{at.cliente?.nome || "Cliente"}</h4>
+                        <h4 className="text-xs font-bold text-stone-850 truncate max-w-[150px]">{formatClienteNome(at.cliente?.nome)}</h4>
                         <p className="text-[10px] text-stone-450 mt-0.5 flex items-center gap-1">
                           <Briefcase className="w-3 h-3 text-rose-500/70" /> {getServicosNomes(at)}
                         </p>
@@ -860,11 +889,11 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
                 >
                   <div className="flex items-center gap-3">
                     <div className="text-center min-w-[50px] p-2 bg-stone-50 rounded-lg border border-stone-100 font-mono">
-                      <span className="text-[10px] font-bold text-stone-600 block">{new Date(at.data + "T12:00:00").toLocaleDateString("pt-BR", {day:"2-digit", month:"2-digit"})}</span>
+                      <span className="text-[10px] font-bold text-stone-600 block">{parseLocal(at.data).toLocaleDateString("pt-BR", {day:"2-digit", month:"2-digit"})}</span>
                       <span className="text-[8px] text-stone-400 block mt-0.5">{at.hora}</span>
                     </div>
                     <div>
-                      <h4 className="text-xs font-bold text-stone-850 truncate max-w-[150px]">{at.cliente?.nome || "Cliente"}</h4>
+                      <h4 className="text-xs font-bold text-stone-850 truncate max-w-[150px]">{formatClienteNome(at.cliente?.nome)}</h4>
                       <p className="text-[10px] text-stone-450 mt-0.5 flex items-center gap-1">
                         <Briefcase className="w-3 h-3 text-stone-450" /> {getServicosNomes(at)}
                       </p>
@@ -1161,7 +1190,7 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
             <div className="bg-stone-900 text-white p-5 flex justify-between items-center">
               <div>
                 <span className="text-[10px] font-bold uppercase tracking-wider text-stone-400">Detalhes do Agendamento</span>
-                <h3 className="font-serif text-lg font-semibold mt-0.5">{selectedAptDetails.cliente?.nome || "Cliente"}</h3>
+                <h3 className="font-serif text-lg font-semibold mt-0.5">{formatClienteNome(selectedAptDetails.cliente?.nome)}</h3>
               </div>
               <button 
                 onClick={() => setSelectedAptDetails(null)} 
@@ -1269,7 +1298,7 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
 
             <div className="p-6 space-y-4">
               <div className="bg-stone-50 p-3 rounded-xl border border-stone-150 text-xs text-stone-600">
-                <p><strong>Cliente:</strong> {finalizeApt.cliente?.nome || "Cliente"}</p>
+                <p><strong>Cliente:</strong> {formatClienteNome(finalizeApt.cliente?.nome)}</p>
                 <p className="mt-1"><strong>Procedimento:</strong> {getServicosNomes(finalizeApt)} (Custo Insumo: R$ {(finalizeApt.custo || 0).toFixed(2)})</p>
               </div>
 
@@ -1380,7 +1409,7 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
 
             <div className="p-6 space-y-4">
               <div className="bg-stone-50 p-3 rounded-xl border border-stone-150 text-xs text-stone-650">
-                <p><strong>Cliente:</strong> {rescheduleApt.cliente?.nome || "Cliente"}</p>
+                <p><strong>Cliente:</strong> {formatClienteNome(rescheduleApt.cliente?.nome)}</p>
                 <p className="mt-1"><strong>Procedimento:</strong> {getServicosNomes(rescheduleApt)}</p>
               </div>
 
@@ -1467,7 +1496,7 @@ export const Dashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ on
             <div className="p-6 space-y-4">
               <div className="bg-rose-50/50 p-3 rounded-xl border border-rose-100 text-xs text-rose-900">
                 <p><strong>Atenção:</strong> Isso alterará o status do atendimento para <strong>Cancelado</strong>. Ele deixará de aparecer na lista de agendamentos pendentes ou em andamento.</p>
-                <p className="mt-2 font-semibold">Cliente: {cancelApt.cliente?.nome || "Cliente"}</p>
+                <p className="mt-2 font-semibold">Cliente: {formatClienteNome(cancelApt.cliente?.nome)}</p>
               </div>
 
               <div>

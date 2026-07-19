@@ -13,8 +13,8 @@ export interface Cliente {
   email: string;
   endereco: string;
   observacoes: string;
-  foto_antes: string; // URL or Base64
-  foto_depois: string; // URL or Base64
+  foto_antes?: string; // URL or Base64
+  foto_depois?: string; // URL or Base64
   ativo: boolean;
   created_at: string;
 }
@@ -105,6 +105,24 @@ export interface UserSession {
   id: string;
   username: string;
   nome: string;
-  role: "master" | "user";
+  role: "master" | "admin" | "cliente" | "user";
   email?: string;
+  empresa?: string;
+  celular?: string;
+  foto_url?: string;
+  status?: string; // Aguardando Assinatura, Assinatura Ativa, etc.
+  plano_atual?: string;
+  plano_status?: string;
+  plano_valor?: number;
+  plano_data_contratacao?: string;
+  plano_data_renovacao?: string;
+  plano_data_vencimento?: string;
+  plano_gateway?: string;
+  plano_assinatura_id?: string;
+  plano_ultimo_pagamento?: string;
+  plano_proximo_pagamento?: string;
+  email_confirmado?: boolean;
+  created_by?: string;
+  must_change_password?: boolean;
+  observacoes_admin?: string;
 }

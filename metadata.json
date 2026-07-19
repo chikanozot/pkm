@@ -1,9 +1,7 @@
 {
-  "name": "PKM Embelezamento",
-  "description": "Sistema completo para gestão de clínica de estética especializada em sobrancelhas, incluindo agenda integrada, financeiro, histórico de clientes com antes/depois e relatórios em PDF.",
-  "requestFramePermissions": [
-    "camera"
-  ],
+  "name": "LUMORA Flow",
+  "description": "Sistema completo para gestão de clínica de estética especializada em sobrancelhas, incluindo agenda integrada, financeiro, histórico de clientes e relatórios em PDF.",
+  "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]
