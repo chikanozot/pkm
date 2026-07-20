@@ -166,11 +166,64 @@ returns table (
   username text,
   nome text,
   role text,
-  created_at timestamp with time zone
+  created_at timestamp with time zone,
+  email text,
+  empresa text,
+  celular text,
+  foto_url text,
+  status text,
+  ultimo_acesso timestamp with time zone,
+  situacao_pagamento text,
+  plano_atual text,
+  plano_status text,
+  plano_valor numeric,
+  plano_data_contratacao timestamp with time zone,
+  plano_data_renovacao timestamp with time zone,
+  plano_data_vencimento timestamp with time zone,
+  plano_gateway text,
+  plano_assinatura_id text,
+  plano_ultimo_pagamento timestamp with time zone,
+  plano_proximo_pagamento timestamp with time zone,
+  created_by text,
+  observacoes_admin text,
+  must_change_password boolean
 ) as $$
 begin
+  -- Security check: only master users can list everyone
+  if not exists (
+    select 1 from public.users
+    where id = auth.uid() and role = 'master'
+  ) then
+    raise exception 'Acesso negado. Apenas o usuário MASTER pode listar todos os usuários.';
+  end if;
+
   return query
-  select u.id, u.username, u.nome, u.role, u.created_at
+  select 
+    u.id, 
+    u.username, 
+    u.nome, 
+    u.role, 
+    u.created_at,
+    u.email,
+    u.empresa,
+    u.celular,
+    u.foto_url,
+    u.status,
+    u.ultimo_acesso,
+    u.situacao_pagamento,
+    u.plano_atual,
+    u.plano_status,
+    u.plano_valor::numeric,
+    u.plano_data_contratacao,
+    u.plano_data_renovacao,
+    u.plano_data_vencimento,
+    u.plano_gateway,
+    u.plano_assinatura_id,
+    u.plano_ultimo_pagamento,
+    u.plano_proximo_pagamento,
+    u.created_by,
+    u.observacoes_admin,
+    u.must_change_password
   from public.users u
   order by u.created_at desc;
 end;
@@ -449,6 +502,39 @@ on public.saas_logs for all using (public.is_master_user() or exists (
     select 1 from public.users u 
     where u.id = auth.uid() and u.role = 'master'
 ));
+
+-- Tabela de Usuários (public.users)
+alter table public.users enable row level security;
+
+drop policy if exists "Permitir leitura do próprio perfil" on public.users;
+create policy "Permitir leitura do próprio perfil"
+on public.users for select
+using (auth.uid() = id);
+
+drop policy if exists "Permitir leitura completa para master" on public.users;
+create policy "Permitir leitura completa para master"
+on public.users for select
+using (
+  public.is_master_user() or exists (
+    select 1 from public.users u 
+    where u.id = auth.uid() and u.role = 'master'
+  )
+);
+
+drop policy if exists "Permitir atualização do próprio perfil" on public.users;
+create policy "Permitir atualização do próprio perfil"
+on public.users for update
+using (auth.uid() = id);
+
+drop policy if exists "Controle total de usuários para master" on public.users;
+create policy "Controle total de usuários para master"
+on public.users for all
+using (
+  public.is_master_user() or exists (
+    select 1 from public.users u 
+    where u.id = auth.uid() and u.role = 'master'
+  )
+);
 
 
 -- =========================================================================

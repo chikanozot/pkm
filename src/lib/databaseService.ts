@@ -1027,18 +1027,30 @@ export const databaseService = {
   async getSystemUsers(): Promise<any[]> {
     checkSupabase();
     try {
-      const { data, error } = await supabase
+      // 1. Try secure RPC get_system_users first (bypasses RLS secure-definer, restricted to role=master in DB)
+      const { data: rpcData, error: rpcError } = await supabase.rpc("get_system_users");
+
+      // Verify if RPC succeeded and returned updated SaaS columns like email or status
+      if (!rpcError && rpcData && rpcData.length > 0 && ("email" in rpcData[0] || "status" in rpcData[0])) {
+        return rpcData;
+      }
+
+      // 2. Fallback: Direct select on public.users table (in case RPC isn't updated but RLS policies are applied/disabled)
+      const { data: directData, error: directError } = await supabase
         .from("users")
         .select("*")
         .order("created_at", { ascending: false });
 
-      if (error) {
-        console.warn("Direct select on users failed, trying RPC...", error);
-        const { data: rpcData, error: rpcErr } = await supabase.rpc("get_system_users");
-        if (!rpcErr && rpcData) return rpcData;
-        throw error;
+      if (!directError && directData && directData.length > 0) {
+        return directData;
       }
-      return data || [];
+
+      // 3. Last Resort Fallback: If direct select returns 0 rows due to RLS but we have basic data from RPC
+      if (!rpcError && rpcData && rpcData.length > 0) {
+        return rpcData;
+      }
+
+      return directData || rpcData || [];
     } catch (err) {
       console.error("Erro ao carregar usuários", err);
       return [];

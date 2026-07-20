@@ -2,7 +2,7 @@
 -- MIGRATION FOR RELATION-BASED MULTIPLE SERVICES PER APPOINTMENT (atendimento_servicos)
 -- =========================================================================
 
--- 1. Garantir que o campo servico_id da tabela de atendimentos seja opcional/nullable,
+-- 1. Garantir que o campo servico_id da tabelas de atendimentos seja opcional/nullable,
 -- permitindo múltiplos serviços sem depender de uma única chave estrangeira obrigatória.
 ALTER TABLE public.atendimentos 
 ALTER COLUMN servico_id DROP NOT NULL;

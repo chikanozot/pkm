@@ -96,6 +96,109 @@ ON public.saas_logs FOR ALL USING (public.is_master_user() OR EXISTS (
     WHERE u.id = auth.uid() AND u.role = 'master'
 ));
 
+-- 6.1 ATUALIZAR FUNÇÃO DE OBTER USUÁRIOS DO SISTEMA COM TODOS OS CAMPOS E SEGURANÇA
+CREATE OR REPLACE FUNCTION public.get_system_users()
+RETURNS TABLE (
+  id UUID,
+  username TEXT,
+  nome TEXT,
+  role TEXT,
+  created_at TIMESTAMP WITH TIME ZONE,
+  email TEXT,
+  empresa TEXT,
+  celular TEXT,
+  foto_url TEXT,
+  status TEXT,
+  ultimo_acesso TIMESTAMP WITH TIME ZONE,
+  situacao_pagamento TEXT,
+  plano_atual TEXT,
+  plano_status TEXT,
+  plano_valor NUMERIC,
+  plano_data_contratacao TIMESTAMP WITH TIME ZONE,
+  plano_data_renovacao TIMESTAMP WITH TIME ZONE,
+  plano_data_vencimento TIMESTAMP WITH TIME ZONE,
+  plano_gateway TEXT,
+  plano_assinatura_id TEXT,
+  plano_ultimo_pagamento TIMESTAMP WITH TIME ZONE,
+  plano_proximo_pagamento TIMESTAMP WITH TIME ZONE,
+  created_by TEXT,
+  observacoes_admin TEXT,
+  must_change_password BOOLEAN
+) AS $$
+BEGIN
+  -- Security check: only master users can list everyone
+  IF NOT EXISTS (
+    SELECT 1 FROM public.users
+    WHERE id = auth.uid() AND role = 'master'
+  ) THEN
+    RAISE EXCEPTION 'Acesso negado. Apenas o usuário MASTER pode listar todos os usuários.';
+  END IF;
+
+  RETURN QUERY
+  SELECT 
+    u.id, 
+    u.username, 
+    u.nome, 
+    u.role, 
+    u.created_at,
+    u.email,
+    u.empresa,
+    u.celular,
+    u.foto_url,
+    u.status,
+    u.ultimo_acesso,
+    u.situacao_pagamento,
+    u.plano_atual,
+    u.plano_status,
+    u.plano_valor::NUMERIC,
+    u.plano_data_contratacao,
+    u.plano_data_renovacao,
+    u.plano_data_vencimento,
+    u.plano_gateway,
+    u.plano_assinatura_id,
+    u.plano_ultimo_pagamento,
+    u.plano_proximo_pagamento,
+    u.created_by,
+    u.observacoes_admin,
+    u.must_change_password
+  FROM public.users u
+  ORDER BY u.created_at DESC;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 6.2 HABILITAR ROW LEVEL SECURITY (RLS) E CRIAR POLÍTICAS PARA TABELA DE USUÁRIOS
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Permitir leitura do próprio perfil" ON public.users;
+CREATE POLICY "Permitir leitura do próprio perfil"
+ON public.users FOR SELECT
+USING (auth.uid() = id);
+
+DROP POLICY IF EXISTS "Permitir leitura completa para master" ON public.users;
+CREATE POLICY "Permitir leitura completa para master"
+ON public.users FOR SELECT
+USING (
+  public.is_master_user() OR EXISTS (
+    SELECT 1 FROM public.users u 
+    WHERE u.id = auth.uid() AND u.role = 'master'
+  )
+);
+
+DROP POLICY IF EXISTS "Permitir atualização do próprio perfil" ON public.users;
+CREATE POLICY "Permitir atualização do próprio perfil"
+ON public.users FOR UPDATE
+USING (auth.uid() = id);
+
+DROP POLICY IF EXISTS "Controle total de usuários para master" ON public.users;
+CREATE POLICY "Controle total de usuários para master"
+ON public.users FOR ALL
+USING (
+  public.is_master_user() OR EXISTS (
+    SELECT 1 FROM public.users u 
+    WHERE u.id = auth.uid() AND u.role = 'master'
+  )
+);
+
 -- 7. ATUALIZAR STATUS DO USUÁRIO MASTER 'zotgod'
 -- Garante que o administrador master zotgod existente tenha papel 'master' e status 'Assinatura Ativa'
 UPDATE public.users 
