@@ -121,13 +121,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       if (profile) {
-        const emailConfirmed = authEmail ? true : (profile.status !== "Aguardando Confirmação");
+        const emailConfirmed = profile.status !== "Aguardando Confirmação";
         const sessionUser: UserSession = {
           id: supabaseUserId,
-          username: profile.username || authEmail?.split("@")[0] || "user",
+          username: profile.username || authEmail?.split("@")[0].replace(/[^a-z0-9]/g, "") || "user",
           nome: profile.nome || "Usuário",
           role: profile.role || "user",
-          email: profile.email || authEmail,
+          email: authEmail || profile.email,
           empresa: profile.empresa || "",
           celular: profile.celular || "",
           foto_url: profile.foto_url || "",
@@ -207,19 +207,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // 2. Refresh session dynamically via official Supabase Auth
     const initAuth = async () => {
       try {
+        const hash = window.location.hash;
+        const search = window.location.search;
+        const isAuthCallback = hash.includes("access_token") || hash.includes("type=") || search.includes("code=") || search.includes("token_hash=");
+
+        // Fetch fresh user directly from Supabase Auth server to guarantee latest email_confirmed_at status
+        const { data: { user: freshUser } } = await supabase.auth.getUser().catch(() => ({ data: { user: null } }));
         const { data: { session } } = await supabase.auth.getSession();
-        if (session?.user) {
-          const merged = await fetchAndMergeProfile(session.user.id, session.user.email);
+        
+        const activeUser = freshUser || session?.user;
+
+        if (activeUser) {
+          const isConfirmed = !!activeUser.email_confirmed_at;
+          const merged = await fetchAndMergeProfile(activeUser.id, activeUser.email);
           if (merged) {
-            // Also enforce email confirmation status
-            merged.email_confirmado = !!session.user.email_confirmed_at;
+            merged.email_confirmado = isConfirmed;
+            if (isConfirmed && merged.status === "Aguardando Confirmação") {
+              merged.status = "Aguardando Assinatura";
+              await databaseService.updateUserProfile(activeUser.id, { status: "Aguardando Assinatura" }).catch(() => {});
+            }
             setUser(merged);
             localStorage.setItem("pkm_user_session", JSON.stringify(merged));
             
             // Log access time
-            await databaseService.updateUserProfile(session.user.id, {
+            await databaseService.updateUserProfile(activeUser.id, {
               ultimo_acesso: new Date().toISOString()
-            });
+            }).catch(() => {});
+          }
+        }
+
+        if (isAuthCallback) {
+          try {
+            window.history.replaceState({}, document.title, window.location.pathname);
+          } catch (histErr) {
+            console.warn("Could not clean URL history state:", histErr);
           }
         }
       } catch (e) {
@@ -231,12 +252,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     initAuth();
 
-    // 3. Listen to auth state updates (autoRefreshToken handles renewal, we update session here)
+    // 3. Listen to auth state updates
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (session?.user) {
-        const merged = await fetchAndMergeProfile(session.user.id, session.user.email);
+        const { data: { user: freshUser } } = await supabase.auth.getUser().catch(() => ({ data: { user: null } }));
+        const activeUser = freshUser || session.user;
+        const isConfirmed = !!activeUser.email_confirmed_at;
+
+        const merged = await fetchAndMergeProfile(activeUser.id, activeUser.email);
         if (merged) {
-          merged.email_confirmado = !!session.user.email_confirmed_at;
+          merged.email_confirmado = isConfirmed;
+          if (isConfirmed && merged.status === "Aguardando Confirmação") {
+            merged.status = "Aguardando Assinatura";
+            await databaseService.updateUserProfile(activeUser.id, { status: "Aguardando Assinatura" }).catch(() => {});
+          }
           setUser(merged);
           localStorage.setItem("pkm_user_session", JSON.stringify(merged));
         }
