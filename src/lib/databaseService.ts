@@ -697,42 +697,37 @@ export const databaseService = {
         const client = clients.find(c => c.id === (atendimento.cliente_id ?? currentApp?.cliente_id));
         const service = services.find(s => s.id === (atendimento.servico_id ?? currentApp?.servico_id));
 
+        let summary = `Estética: ${client?.nome || "Cliente"}`;
         if (nextStatus === "Cancelado") {
-          // Exclude cancelled events
-          await fetch("/api/calendar/event/delete", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ userId: professionalId, eventId: googleEventId })
-          });
-          googleEventId = ""; // Clear ID
-        } else {
-          // Update event
-          const startDateTime = `${nextData}T${nextHora}:00`;
-          const startTime = new Date(startDateTime);
-          const endTime = new Date(startTime.getTime() + (nextDuracao || 30) * 60 * 1000);
-          const endDateTime = endTime.toISOString();
-
-          const nextServicosDetalhes = atendimento.servicos_detalhes ?? currentApp?.servicos_detalhes;
-          let servicesText = "";
-          if (nextServicosDetalhes && Array.isArray(nextServicosDetalhes) && nextServicosDetalhes.length > 0) {
-            servicesText = nextServicosDetalhes.map(s => `• ${s.nome}`).join("\n");
-          } else {
-            servicesText = `• ${service?.nome || "Atendimento"}`;
-          }
-
-          await fetch("/api/calendar/event/update", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              userId: professionalId,
-              eventId: googleEventId,
-              summary: `Estética: ${client?.nome || "Cliente"}`,
-              description: `Atendimento de Estética e Sobrancelhas\n\nCliente: ${client?.nome || ""}\nWhatsApp: ${client?.whatsapp || ""}\n\nServiços:\n${servicesText}\n\nObservações: ${(atendimento.observacoes ?? currentApp.observacoes) || ""}\nStatus: ${nextStatus}`,
-              startDateTime,
-              endDateTime
-            })
-          });
+          summary = `[CANCELADO] ${summary}`;
         }
+
+        // Update event on Google Calendar (do not delete cancelled events as per requirements)
+        const startDateTime = `${nextData}T${nextHora}:00`;
+        const startTime = new Date(startDateTime);
+        const endTime = new Date(startTime.getTime() + (nextDuracao || 30) * 60 * 1000);
+        const endDateTime = endTime.toISOString();
+
+        const nextServicosDetalhes = atendimento.servicos_detalhes ?? currentApp?.servicos_detalhes;
+        let servicesText = "";
+        if (nextServicosDetalhes && Array.isArray(nextServicosDetalhes) && nextServicosDetalhes.length > 0) {
+          servicesText = nextServicosDetalhes.map(s => `• ${s.nome}`).join("\n");
+        } else {
+          servicesText = `• ${service?.nome || "Atendimento"}`;
+        }
+
+        await fetch("/api/calendar/event/update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: professionalId,
+            eventId: googleEventId,
+            summary,
+            description: `Atendimento de Estética e Sobrancelhas\n\nCliente: ${client?.nome || ""}\nWhatsApp: ${client?.whatsapp || ""}\n\nServiços:\n${servicesText}\n\nObservações: ${(atendimento.observacoes ?? currentApp.observacoes) || ""}\nStatus: ${nextStatus}`,
+            startDateTime,
+            endDateTime
+          })
+        });
       } catch (err) {
         console.error("Failed to sync Google Agenda event on update:", err);
       }
@@ -949,6 +944,9 @@ export const databaseService = {
     if (fetchError) throw fetchError;
     const currentApp = data;
 
+    // We do NOT delete the Google Calendar event automatically when deleting system appointments,
+    // as per the requirement: "Não apagar automaticamente o evento do Google Calendar, a menos que isso seja explicitamente configurado."
+    /*
     if (currentApp?.google_event_id) {
       try {
         await fetch("/api/calendar/event/delete", {
@@ -960,6 +958,7 @@ export const databaseService = {
         console.error("Failed to delete from Google Agenda:", err);
       }
     }
+    */
 
     const { error } = await supabase
       .from("atendimentos")

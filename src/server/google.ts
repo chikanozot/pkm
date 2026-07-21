@@ -284,12 +284,14 @@ export async function deleteGoogleCalendarEvent(accessToken: string, eventId: st
 export async function listGoogleCalendarEvents(
   accessToken: string,
   options: {
+    calendarId?: string;
     syncToken?: string;
     timeMin?: string;
     pageToken?: string;
   } = {}
 ) {
-  const url = new URL("https://www.googleapis.com/calendar/v3/calendars/primary/events");
+  const calendarId = options.calendarId || "primary";
+  const url = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`);
   
   if (options.syncToken) {
     url.searchParams.set("syncToken", options.syncToken);
@@ -322,5 +324,32 @@ export async function listGoogleCalendarEvents(
   }
 
   return response.json();
+}
+
+// 9. Find calendar by name in user's calendar list
+export async function findCalendarByName(accessToken: string, name: string): Promise<string | null> {
+  const response = await fetch("https://www.googleapis.com/calendar/v3/users/me/calendarList", {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Google Calendar List Calendars error: ${errText}`);
+  }
+
+  const data = await response.json();
+  const calendars = data.items || [];
+  
+  // Look for a calendar whose summary matches the name (case-insensitive, trimmed)
+  const targetName = name.trim().toUpperCase();
+  const matched = calendars.find(
+    (cal: any) => cal.summary && cal.summary.trim().toUpperCase() === targetName
+  );
+  
+  return matched ? matched.id : null;
 }
 

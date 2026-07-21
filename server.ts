@@ -16,6 +16,7 @@ import {
   updateGoogleCalendarEvent,
   deleteGoogleCalendarEvent,
   listGoogleCalendarEvents,
+  findCalendarByName,
 } from "./src/server/google.js";
 
 // Load environment variables
@@ -494,7 +495,7 @@ app.post("/api/auth/google/sync-settings", async (req, res) => {
   res.json({ success: true, syncActive });
 });
 
-// 9.5 GET Google Calendar External Events (Pendente & contains "ATENDIMENTO")
+// 9.5 GET Google Calendar External Events (Pendente & specifically from 'ATENDIMENTOS' calendar)
 app.get("/api/calendar/external-events", async (req, res) => {
   const { userId } = req.query;
   if (!userId || typeof userId !== "string") {
@@ -515,6 +516,18 @@ app.get("/api/calendar/external-events", async (req, res) => {
       return res.json({ success: true, connected: false, events: [] });
     }
 
+    // Locate the "ATENDIMENTOS" calendar ID
+    const calendarId = await findCalendarByName(connection.access_token, "ATENDIMENTOS");
+    if (!calendarId) {
+      return res.json({
+        success: true,
+        connected: true,
+        calendarNotFound: true,
+        message: "Calendário 'ATENDIMENTOS' não localizado no seu Google Calendar. Por favor, crie um calendário com este nome exato.",
+        events: []
+      });
+    }
+
     // List events from 30 days ago to 90 days in the future
     const timeMin = new Date();
     timeMin.setDate(timeMin.getDate() - 30);
@@ -524,6 +537,7 @@ app.get("/api/calendar/external-events", async (req, res) => {
 
     while (true) {
       const responseData = await listGoogleCalendarEvents(connection.access_token, {
+        calendarId,
         timeMin: timeMin.toISOString(),
         pageToken,
       });
@@ -538,15 +552,9 @@ app.get("/api/calendar/external-events", async (req, res) => {
       }
     }
 
-    // Filter events that are not cancelled and contain "ATENDIMENTO" in summary or description
+    // Filter events that are not cancelled (all items in this custom calendar are considered appointments)
     const filteredEvents = allEvents.filter((event: any) => {
-      if (event.status === "cancelled") return false;
-      const summary = event.summary || "";
-      const description = event.description || "";
-      return (
-        summary.toUpperCase().includes("ATENDIMENTO") ||
-        description.toUpperCase().includes("ATENDIMENTO")
-      );
+      return event.status !== "cancelled";
     });
 
     // Fetch existing appointment google_event_ids to exclude already finalized/imported ones
@@ -601,6 +609,7 @@ app.get("/api/calendar/external-events", async (req, res) => {
           id: event.id,
           summary: event.summary || "",
           description: event.description || "",
+          location: event.location || "",
           data: eventDate,
           hora: eventTime,
           duracao: durationMinutes,
@@ -686,6 +695,22 @@ async function syncUserCalendar(userId: string, forceFull = false) {
   }
 
   try {
+    // 1. Locate the "ATENDIMENTOS" calendar ID
+    const calendarId = await findCalendarByName(connection.access_token, "ATENDIMENTOS");
+    if (!calendarId) {
+      console.warn(`[Google Calendar Sync] Calendar 'ATENDIMENTOS' not found for user ${userId}`);
+      await updateConnectionSyncStatus(
+        userId,
+        "error",
+        "Calendário 'ATENDIMENTOS' não localizado no seu Google Calendar. Por favor, crie um calendário com este nome exato para sincronizar.",
+        null
+      );
+      return {
+        success: false,
+        error: "Calendário 'ATENDIMENTOS' não localizado no seu Google Calendar. Por favor, crie um calendário com este nome exato."
+      };
+    }
+
     let syncToken = forceFull ? undefined : connection.next_sync_token;
     let timeMin = undefined;
     
@@ -694,9 +719,9 @@ async function syncUserCalendar(userId: string, forceFull = false) {
       const ninetyDaysAgo = new Date();
       ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
       timeMin = ninetyDaysAgo.toISOString();
-      console.log(`[Google Calendar Sync] First or full sync. Fetching events starting from ${timeMin}`);
+      console.log(`[Google Calendar Sync] First or full sync on calendar ${calendarId}. Fetching events starting from ${timeMin}`);
     } else {
-      console.log(`[Google Calendar Sync] Incremental sync using token: ${syncToken}`);
+      console.log(`[Google Calendar Sync] Incremental sync on calendar ${calendarId} using token: ${syncToken}`);
     }
 
     let pageToken = undefined;
@@ -706,6 +731,7 @@ async function syncUserCalendar(userId: string, forceFull = false) {
     while (true) {
       try {
         const responseData = await listGoogleCalendarEvents(connection.access_token, {
+          calendarId,
           syncToken,
           timeMin,
           pageToken,
@@ -824,7 +850,7 @@ async function syncUserCalendar(userId: string, forceFull = false) {
         continue;
       }
 
-      const eventSummary = event.summary || "";
+      const eventSummary = event.summary || "Cliente Google";
       const eventDescription = event.description || "";
       const googleUpdatedTime = event.updated ? new Date(event.updated).getTime() : 0;
 
@@ -836,13 +862,23 @@ async function syncUserCalendar(userId: string, forceFull = false) {
           conflictCount++;
           continue;
         }
+
+        if (appointment.status === "Concluído" || appointment.status === "Cancelado") {
+          console.log(`[Google Calendar Sync] Appointment ${appointment.id} is already ${appointment.status}. Skipping update to avoid overwriting finalized records.`);
+          continue;
+        }
         
         console.log(`[Google Calendar Sync] Updating existing appointment ${appointment.id}`);
+        let obs = eventDescription;
+        if (event.location) {
+          obs = `Local: ${event.location}\n\n${obs}`;
+        }
+
         const updatedFields: any = {
           data: eventDate,
           hora: eventTime,
           duracao: durationMinutes,
-          observacoes: eventDescription,
+          observacoes: obs,
           google_last_sync: new Date().toISOString(),
           google_sync_status: "synced"
         };
@@ -860,9 +896,126 @@ async function syncUserCalendar(userId: string, forceFull = false) {
           }
         }
       } else {
-        // Under the new requirement, we do NOT auto-create clients, services, or appointments upon discovery.
-        // Instead, they are fetched dynamically via /api/calendar/external-events and shown in the UI.
-        console.log(`[Google Calendar Sync] Discovered new external event ${googleEventId}, skipping auto-import.`);
+        // Discovered a new external event, let's import it as a real system appointment!
+        console.log(`[Google Calendar Sync] Discovered new external event ${googleEventId}, importing as a real system appointment.`);
+        
+        if (!supabase) continue;
+
+        // 1. Determine client (find or create)
+        const clientNameNormalized = eventSummary.trim().toUpperCase();
+        let client = clients.find(c => c.nome.trim().toUpperCase() === clientNameNormalized);
+        
+        if (!client) {
+          console.log(`[Google Calendar Sync] Client not found with name "${eventSummary}". Creating new client.`);
+          const { data: newClient, error: clientErr } = await supabase
+            .from("clientes")
+            .insert({
+              user_id: userId,
+              nome: eventSummary,
+              telefone: "",
+              whatsapp: "",
+              email: "",
+              endereco: "",
+              observacoes: "Cliente criado automaticamente via importação do Google Calendar 'ATENDIMENTOS'."
+            })
+            .select()
+            .single();
+            
+          if (clientErr || !newClient) {
+            console.error(`[Google Calendar Sync] Error creating client:`, clientErr);
+            continue;
+          }
+          
+          client = newClient;
+          clients.push(client);
+        }
+
+        // 2. Determine service (find or create default)
+        let service = null;
+        const searchPool = (eventSummary + " " + eventDescription).toUpperCase();
+        
+        for (const s of services) {
+          if (searchPool.includes(s.nome.toUpperCase())) {
+            service = s;
+            break;
+          }
+        }
+        
+        if (!service) {
+          if (services.length > 0) {
+            service = services[0];
+          } else {
+            console.log(`[Google Calendar Sync] No services exist. Creating default service 'Procedimento Google'`);
+            const { data: newService, error: serviceErr } = await supabase
+              .from("servicos")
+              .insert({
+                user_id: userId,
+                nome: "Procedimento Google",
+                valor: 0.00,
+                duracao: 60,
+                descricao: "Serviço padrão criado para atendimentos importados do Google Calendar."
+              })
+              .select()
+              .single();
+              
+            if (serviceErr || !newService) {
+              console.error(`[Google Calendar Sync] Error creating default service:`, serviceErr);
+              continue;
+            }
+            
+            service = newService;
+            services.push(service);
+          }
+        }
+
+        // 3. Set observations
+        let obs = eventDescription;
+        if (event.location) {
+          obs = `Local: ${event.location}\n\n${obs}`;
+        }
+
+        // 4. Determine status based on event time
+        let initialStatus = "Agendado";
+        const startDateTimeStr = event.start?.dateTime || event.start?.date;
+        if (startDateTimeStr) {
+          const startMs = new Date(startDateTimeStr).getTime();
+          const durationMs = durationMinutes * 60 * 1000;
+          const endMs = startMs + durationMs;
+          if (endMs < Date.now()) {
+            initialStatus = "Concluído";
+          }
+        }
+
+        // 5. Create appointment
+        const valCobrado = service.valor || 0.00;
+        const { error: insertErr } = await supabase
+          .from("atendimentos")
+          .insert({
+            user_id: userId,
+            cliente_id: client.id,
+            servico_id: service.id,
+            data: eventDate,
+            hora: eventTime,
+            duracao: durationMinutes,
+            observacoes: obs,
+            status: initialStatus,
+            valor_cobrado: valCobrado,
+            forma_pagamento: "Pix",
+            pago: initialStatus === "Concluído",
+            fiado: false,
+            custo: service.custo || 0.00,
+            lucro_liquido: valCobrado - (service.custo || 0.00),
+            google_event_id: googleEventId,
+            google_calendar_id: calendarId,
+            google_last_sync: new Date().toISOString(),
+            google_sync_status: "synced"
+          });
+
+        if (insertErr) {
+          console.error(`[Google Calendar Sync] Error importing event ${googleEventId}:`, insertErr);
+        } else {
+          importedCount++;
+        }
       }
     }
 
