@@ -57,6 +57,31 @@ export const SaaSStatusGate: React.FC = () => {
     }
   }, [user, saasSettings]);
 
+  React.useEffect(() => {
+    if (!user) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("checkout_success") === "true") {
+      setCheckoutStep("success");
+      // Clean query parameters to avoid double-triggering
+      window.history.replaceState({}, document.title, window.location.pathname);
+      
+      // Setup a background poll interval to wait for the Stripe Webhook to update Supabase
+      const interval = setInterval(async () => {
+        await reloadProfile();
+      }, 2500);
+
+      // Stop polling after 15 seconds
+      const timeout = setTimeout(() => {
+        clearInterval(interval);
+      }, 15000);
+
+      return () => {
+        clearInterval(interval);
+        clearTimeout(timeout);
+      };
+    }
+  }, [user]);
+
   const bronzePrice = saasSettings?.plano_bronze_valor ?? 49.90;
   const prataPrice = saasSettings?.plano_prata_valor ?? 99.90;
   const ouroPrice = saasSettings?.plano_ouro_valor ?? 149.90;
@@ -143,6 +168,31 @@ export const SaaSStatusGate: React.FC = () => {
     if (!user || !selectedPlan) return;
     setLoading(true);
     try {
+      if (paymentMethod === "card") {
+        console.log("[Stripe Integration] Iniciando Checkout Stripe para o plano:", selectedPlan.id);
+        const response = await fetch("/api/payments/create-checkout-session", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            planId: selectedPlan.id,
+            userId: user.id,
+            email: user.email
+          })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.url) {
+            // Redirect the user to the Stripe Checkout page
+            window.location.href = data.url;
+            return;
+          }
+        }
+        console.warn("[Stripe Integration] Falha ou chaves Stripe ausentes, executando fluxo de simulação local.");
+      }
+
       const now = new Date();
       const nextMonth = new Date();
       nextMonth.setMonth(nextMonth.getMonth() + 1);
@@ -170,7 +220,7 @@ export const SaaSStatusGate: React.FC = () => {
       await databaseService.logSaaSAction({
         admin_id: null,
         admin_nome: "SaaS Gateway",
-        acao: `Assinatura de plano processada: ${selectedPlan.id} por R$ ${selectedPlan.price.toFixed(2)} (${paymentMethod === "pix" ? "Pix" : "Cartão"})`,
+        acao: `Assinatura de plano processada: ${selectedPlan.id} por R$ ${selectedPlan.price.toFixed(2)} (${paymentMethod === "pix" ? "Pix" : "Cartão (Simulado)"})`,
         user_id: user.id,
         user_nome: user.nome
       });
