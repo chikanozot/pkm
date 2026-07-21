@@ -239,7 +239,7 @@ export const GoogleCalendarConfig: React.FC = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Google Agenda Connection Box */}
-        <div className="lg:col-span-2 bg-white rounded-2xl border border-stone-200/60 shadow-sm p-6 space-y-6">
+        <div className={`${user?.role === "master" ? "lg:col-span-2" : "lg:col-span-3"} bg-white rounded-2xl border border-stone-200/60 shadow-sm p-6 space-y-6`}>
           <div className="flex items-start gap-4">
             <div className="p-3 bg-blue-50 text-blue-600 rounded-xl border border-blue-100">
               <Calendar className="w-6 h-6" />
@@ -383,68 +383,74 @@ export const GoogleCalendarConfig: React.FC = () => {
                 </button>
               </div>
 
-              <div className="p-3 bg-amber-50 text-amber-800 border border-amber-200 rounded-xl text-xs flex items-start gap-2 leading-relaxed">
-                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <div>
-                  <span className="font-semibold">Nota para o Administrador:</span>
-                  <p className="mt-0.5 text-amber-700">
-                    Certifique-se de configurar as chaves de OAuth do Google (<code className="font-mono bg-amber-100 px-1 rounded">GOOGLE_CLIENT_ID</code> e <code className="font-mono bg-amber-100 px-1 rounded">GOOGLE_CLIENT_SECRET</code>) nas Configurações/Secrets da aplicação. Lembre-se de adicionar o callback oficial ao painel de desenvolvedores do Google Cloud:
-                  </p>
-                  <p className="font-mono bg-white p-1.5 rounded border border-amber-200 text-[10px] select-all mt-1.5 w-fit text-stone-800">
-                    {window.location.origin}/auth/google/callback
-                  </p>
+              {user?.role === "master" && (
+                <div className="p-3 bg-amber-50 text-amber-800 border border-amber-200 rounded-xl text-xs flex items-start gap-2 leading-relaxed">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-semibold">Nota para o Administrador:</span>
+                    <p className="mt-0.5 text-amber-700">
+                      Certifique-se de configurar as chaves de OAuth do Google (<code className="font-mono bg-amber-100 px-1 rounded">GOOGLE_CLIENT_ID</code> e <code className="font-mono bg-amber-100 px-1 rounded">GOOGLE_CLIENT_SECRET</code>) nas Configurações/Secrets da aplicação. Lembre-se de adicionar o callback oficial ao painel de desenvolvedores do Google Cloud:
+                    </p>
+                    <p className="font-mono bg-white p-1.5 rounded border border-amber-200 text-[10px] select-all mt-1.5 w-fit text-stone-800">
+                      {window.location.origin}/auth/google/callback
+                    </p>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
         </div>
 
         {/* Supabase connection instruction Card */}
-        <div className="bg-white rounded-2xl border border-stone-200/60 shadow-sm p-6 space-y-5">
-          <div className="flex items-start gap-3">
-            <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-lg border border-emerald-100">
-              <Cloud className="w-5 h-5" />
+        {user?.role === "master" && (
+          <div className="bg-white rounded-2xl border border-stone-200/60 shadow-sm p-6 space-y-5">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-lg border border-emerald-100">
+                <Cloud className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-serif font-semibold text-stone-900">Banco Supabase</h3>
+                <p className="text-xs text-stone-500 mt-0.5">Persistência oficial de alta segurança.</p>
+              </div>
             </div>
-            <div>
-              <h3 className="font-serif font-semibold text-stone-900">Banco Supabase</h3>
-              <p className="text-xs text-stone-500 mt-0.5">Persistência oficial de alta segurança.</p>
-            </div>
-          </div>
 
-          <div className="space-y-3 pt-1">
-            <div className="p-3 rounded-xl border border-stone-100 bg-stone-50/50 text-xs text-stone-600 space-y-1">
-              <p>O sistema suporta persistência oficial direta no seu próprio projeto Supabase.</p>
-              <p className="font-semibold text-stone-800">Variáveis a declarar nos Secrets:</p>
-              <ul className="list-disc pl-4 space-y-0.5 font-mono text-[10px] text-stone-700">
-                <li>VITE_SUPABASE_URL</li>
-                <li>VITE_SUPABASE_ANON_KEY</li>
-                <li>SUPABASE_URL</li>
-                <li>SUPABASE_ANON_KEY</li>
-              </ul>
+            <div className="space-y-3 pt-1">
+              <div className="p-3 rounded-xl border border-stone-100 bg-stone-50/50 text-xs text-stone-600 space-y-1">
+                <p>O sistema suporta persistência oficial direta no seu próprio projeto Supabase.</p>
+                <p className="font-semibold text-stone-800">Variáveis a declarar nos Secrets:</p>
+                <ul className="list-disc pl-4 space-y-0.5 font-mono text-[10px] text-stone-700">
+                  <li>VITE_SUPABASE_URL</li>
+                  <li>VITE_SUPABASE_ANON_KEY</li>
+                  <li>SUPABASE_URL</li>
+                  <li>SUPABASE_ANON_KEY</li>
+                </ul>
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* SQL Script Box */}
-      <div className="bg-white rounded-2xl border border-stone-200/60 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 bg-stone-900 text-white flex items-center justify-between">
-          <div>
-            <h3 className="font-serif font-semibold text-base">Script SQL do Supabase</h3>
-            <p className="text-xs text-stone-400 mt-0.5">Copie e execute no editor SQL do seu painel Supabase para criar a estrutura e políticas de segurança RLS.</p>
+      {user?.role === "master" && (
+        <div className="bg-white rounded-2xl border border-stone-200/60 shadow-sm overflow-hidden">
+          <div className="px-6 py-4 bg-stone-900 text-white flex items-center justify-between">
+            <div>
+              <h3 className="font-serif font-semibold text-base">Script SQL do Supabase</h3>
+              <p className="text-xs text-stone-400 mt-0.5">Copie e execute no editor SQL do seu painel Supabase para criar a estrutura e políticas de segurança RLS.</p>
+            </div>
+            <button
+              onClick={handleCopySql}
+              className="flex items-center gap-1 px-3 py-1.5 bg-stone-800 hover:bg-stone-750 border border-stone-700 hover:border-stone-600 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+            >
+              {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+              {copied ? "Copiado!" : "Copiar SQL"}
+            </button>
           </div>
-          <button
-            onClick={handleCopySql}
-            className="flex items-center gap-1 px-3 py-1.5 bg-stone-800 hover:bg-stone-750 border border-stone-700 hover:border-stone-600 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
-          >
-            {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-            {copied ? "Copiado!" : "Copiar SQL"}
-          </button>
+          <div className="p-4 bg-stone-950 font-mono text-[11px] text-stone-300 max-h-72 overflow-y-auto whitespace-pre leading-relaxed select-all">
+            {SUPABASE_SQL_SCHEMA}
+          </div>
         </div>
-        <div className="p-4 bg-stone-950 font-mono text-[11px] text-stone-300 max-h-72 overflow-y-auto whitespace-pre leading-relaxed select-all">
-          {SUPABASE_SQL_SCHEMA}
-        </div>
-      </div>
+      )}
     </div>
   );
 };

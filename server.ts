@@ -944,6 +944,118 @@ async function verifyMasterAdmin(supabaseClient: any, adminId: string): Promise<
   }
 }
 
+// ==========================================
+// User Authentication & Profile Endpoints (Bypasses RLS recursion)
+// ==========================================
+
+// Get Single User Profile (Securely verified via Supabase User Token)
+app.get("/api/user/profile", async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId || typeof userId !== "string") {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const supabaseClient = getSupabase();
+    if (!supabaseClient) {
+      return res.status(500).json({ error: "Supabase client not initialized on server" });
+    }
+
+    // Secure verification using the client's bearer token
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ error: "Nenhum token de autenticação fornecido." });
+    }
+    const token = authHeader.split(" ")[1];
+
+    const { data: { user: authUser }, error: authErr } = await supabaseClient.auth.getUser(token);
+    if (authErr || !authUser || authUser.id !== userId) {
+      console.warn(`[User API] Unauthorized access attempt for user ${userId}`);
+      return res.status(403).json({ error: "Acesso não autorizado ao perfil." });
+    }
+
+    // Fetch the profile bypassing RLS
+    const { data: profile, error: dbErr } = await supabaseClient
+      .from("users")
+      .select("*")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (dbErr) {
+      console.error(`[User API] Error fetching profile for ${userId}:`, dbErr);
+      throw dbErr;
+    }
+
+    return res.json({ profile });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// Public endpoint to safely get Supabase client connection parameters (URL and Anon Key)
+app.get("/api/supabase-config", (req, res) => {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
+  const anonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
+  return res.json({
+    supabaseUrl: url && !url.includes("placeholder-please-set") ? url : "",
+    supabaseAnonKey: anonKey && !anonKey.includes("placeholder-please-set") ? anonKey : ""
+  });
+});
+
+// Public endpoint to check uniqueness of email, username, and celular during signup
+app.get("/api/auth/check-uniqueness", async (req, res) => {
+  try {
+    const { email, username, celular } = req.query;
+
+    const supabaseClient = getSupabase();
+    if (!supabaseClient) {
+      return res.status(500).json({ error: "Supabase client not initialized on server" });
+    }
+
+    let emailExists = false;
+    let usernameExists = false;
+    let celularExists = false;
+
+    // Check email (case insensitive)
+    if (email && typeof email === "string") {
+      const { data, error } = await supabaseClient
+        .from("users")
+        .select("id")
+        .ilike("email", email.trim())
+        .maybeSingle();
+      if (!error && data) emailExists = true;
+    }
+
+    // Check username (case insensitive)
+    if (username && typeof username === "string") {
+      const { data, error } = await supabaseClient
+        .from("users")
+        .select("id")
+        .ilike("username", username.trim())
+        .maybeSingle();
+      if (!error && data) usernameExists = true;
+    }
+
+    // Check celular
+    if (celular && typeof celular === "string") {
+      const { data, error } = await supabaseClient
+        .from("users")
+        .select("id")
+        .eq("celular", celular.trim())
+        .maybeSingle();
+      if (!error && data) celularExists = true;
+    }
+
+    return res.json({
+      emailExists,
+      usernameExists,
+      celularExists
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
 // 1. Get All System Users (Bypasses RLS safely if server client has service_role key)
 app.get("/api/admin/get-users", async (req, res) => {
   try {

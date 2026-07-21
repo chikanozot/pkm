@@ -100,3 +100,39 @@ ADD COLUMN IF NOT EXISTS sync_status TEXT,
 ADD COLUMN IF NOT EXISTS sync_error TEXT,
 ADD COLUMN IF NOT EXISTS next_sync_token TEXT;
 
+
+-- =========================================================================
+2. CORREÇÃO DE SEGURANÇA E CADASTRO: PERMITIR QUE NOVOS USUÁRIOS CRIEM CLIENTES
+-- =========================================================================
+
+-- 1. Permitir que o novo usuário insira seu próprio perfil na tabela 'public.users' durante o signup
+DROP POLICY IF EXISTS "Permitir inserção do próprio perfil" ON public.users;
+CREATE POLICY "Permitir inserção do próprio perfil"
+ON public.users FOR INSERT
+WITH CHECK (auth.uid() = id);
+
+-- 2. Atualizar a função 'create_system_user' para aceitar o UUID original gerado pelo Supabase Auth (p_id)
+-- para evitar gerar um ID aleatório diferente do ID de login do usuário, o que causa violações de chave estrangeira (FK)
+CREATE OR REPLACE FUNCTION public.create_system_user(p_username text, p_password text, p_nome text, p_role text DEFAULT 'user', p_id uuid DEFAULT NULL)
+RETURNS TABLE (
+  id uuid,
+  username text,
+  nome text,
+  role text,
+  created_at timestamp with time zone
+) AS $$
+DECLARE
+  v_user_id uuid;
+BEGIN
+  INSERT INTO public.users (id, username, password_hash, nome, role)
+  VALUES (COALESCE(p_id, gen_random_uuid()), LOWER(p_username), crypt(p_password, gen_salt('bf', 8)), p_nome, p_role)
+  RETURNING public.users.id INTO v_user_id;
+
+  RETURN QUERY
+  SELECT u.id, u.username, u.nome, u.role, u.created_at
+  FROM public.users u
+  WHERE u.id = v_user_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+

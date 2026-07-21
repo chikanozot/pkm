@@ -35,60 +35,86 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
       // Self-healing: If user is authenticated via Supabase but profile row is missing in public.users
       if (!profile && authEmail && isSupabaseConfigured && supabase) {
-        console.warn(`Profile for user ${supabaseUserId} is missing. Recreating profile dynamically...`);
-        const cleanEmail = authEmail.toLowerCase().trim();
-        const baseUsername = cleanEmail.split("@")[0];
-        
-        // Ensure username is unique to avoid unique constraint violations
-        let uniqueUsername = baseUsername;
-        let suffix = 1;
-        const usersList = await databaseService.getSystemUsers();
-        while (usersList.some(u => u.username?.toLowerCase() === uniqueUsername.toLowerCase() && u.id !== supabaseUserId)) {
-          uniqueUsername = `${baseUsername}${suffix}`;
-          suffix++;
-        }
-
-        // Fetch metadata from Supabase user object if available
-        let nome = "Usuário";
-        let celular = "";
-        let empresa = "";
         try {
-          const { data: { user: authUser } } = await supabase.auth.getUser();
-          if (authUser?.user_metadata) {
-            nome = authUser.user_metadata.nome || authUser.user_metadata.name || nome;
-            celular = authUser.user_metadata.celular || celular;
-            empresa = authUser.user_metadata.empresa || empresa;
+          console.warn(`Profile for user ${supabaseUserId} is missing. Recreating profile dynamically...`);
+          const cleanEmail = authEmail.toLowerCase().trim();
+          const baseUsername = cleanEmail.split("@")[0];
+          
+          // Ensure username is unique to avoid unique constraint violations
+          let uniqueUsername = baseUsername;
+          let suffix = 1;
+          
+          // Use the secure uniqueness endpoint instead of getSystemUsers which is restricted to Master admin
+          try {
+            let exists = true;
+            while (exists) {
+              const res = await fetch(`/api/auth/check-uniqueness?username=${encodeURIComponent(uniqueUsername)}`);
+              if (res.ok) {
+                const data = await res.json();
+                if (data.usernameExists) {
+                  uniqueUsername = `${baseUsername}${suffix}`;
+                  suffix++;
+                } else {
+                  exists = false;
+                }
+              } else {
+                exists = false;
+              }
+            }
+          } catch (uniqErr) {
+            console.error("Failed to check username uniqueness during self-healing:", uniqErr);
           }
-        } catch (metaErr) {
-          console.error("Could not fetch user metadata during self-healing, using defaults:", metaErr);
+
+          // Fetch metadata from Supabase user object if available
+          let nome = "Usuário";
+          let celular = "";
+          let empresa = "";
+          try {
+            const { data: { user: authUser } } = await supabase.auth.getUser();
+            if (authUser?.user_metadata) {
+              nome = authUser.user_metadata.nome || authUser.user_metadata.name || nome;
+              celular = authUser.user_metadata.celular || celular;
+              empresa = authUser.user_metadata.empresa || empresa;
+            }
+          } catch (metaErr) {
+            console.error("Could not fetch user metadata during self-healing, using defaults:", metaErr);
+          }
+
+          const fallbackProfile = {
+            id: supabaseUserId,
+            username: uniqueUsername,
+            nome,
+            role: "user" as const,
+            email: cleanEmail,
+            celular: celular || null,
+            empresa: empresa || null,
+            status: "Aguardando Assinatura",
+            plano_atual: "Plano Bronze",
+            plano_status: "Inativo",
+            plano_valor: 49.90,
+            ultimo_acesso: new Date().toISOString(),
+            password_hash: "auth_managed"
+          };
+
+          const { error: insertErr } = await supabase
+            .from("users")
+            .insert([fallbackProfile]);
+
+          if (insertErr) {
+            if (insertErr.code === "23505" || insertErr.message?.includes("duplicate key") || insertErr.message?.includes("already exists")) {
+              console.log("Profile already exists in database (duplicate key caught). Re-fetching profile...");
+            } else {
+              console.warn("Direct insert profile during self-healing failed. Falling back to helper...", insertErr);
+              await databaseService.insertSystemUser(fallbackProfile as any).catch(e => {
+                console.warn("Fallback helper insert failed too:", e);
+              });
+            }
+          }
+
+          profile = await databaseService.getUserProfile(supabaseUserId);
+        } catch (healErr) {
+          console.error("Error during self-healing profile creation:", healErr);
         }
-
-        const fallbackProfile = {
-          id: supabaseUserId,
-          username: uniqueUsername,
-          nome,
-          role: "user" as const,
-          email: cleanEmail,
-          celular: celular || null,
-          empresa: empresa || null,
-          status: "Aguardando Assinatura",
-          plano_atual: "Plano Bronze",
-          plano_status: "Inativo",
-          plano_valor: 49.90,
-          ultimo_acesso: new Date().toISOString(),
-          password_hash: "auth_managed"
-        };
-
-        const { error: insertErr } = await supabase
-          .from("users")
-          .insert([fallbackProfile]);
-
-        if (insertErr) {
-          console.warn("Direct insert profile during self-healing failed. Falling back to helper...", insertErr);
-          await databaseService.insertSystemUser(fallbackProfile as any);
-        }
-
-        profile = await databaseService.getUserProfile(supabaseUserId);
       }
 
       if (profile) {
@@ -123,6 +149,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (e) {
       console.error("Error fetching user profile to merge:", e);
     }
+
+    // In-memory fallback if the profile exists but is unreadable due to RLS policies
+    if (supabaseUserId) {
+      console.warn("Returning safety in-memory fallback profile to prevent login lockout.");
+      const email = authEmail || "usuario@pkm.com";
+      const sessionUser: UserSession = {
+        id: supabaseUserId,
+        username: email.split("@")[0] || "usuario",
+        nome: "Usuário",
+        role: "user",
+        email: email,
+        empresa: "",
+        celular: "",
+        foto_url: "",
+        status: "Assinatura Ativa",
+        plano_atual: "Plano Bronze",
+        plano_status: "Ativo",
+        plano_valor: 49.90,
+        email_confirmado: true
+      };
+      return sessionUser;
+    }
+
     return null;
   };
 
@@ -242,26 +291,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             });
           } else {
             // No profile? Create a basic one
-            const fallbackProfile = {
-              id: authData.user.id,
-              username: authData.user.email?.split("@")[0] || "user",
-              nome: authData.user.user_metadata?.nome || "Usuário",
-              role: "user" as const,
-              email: authData.user.email,
-              status: "Aguardando Assinatura",
-              plano_atual: "Plano Bronze",
-              plano_status: "Inativo",
-              ultimo_acesso: new Date().toISOString(),
-              password_hash: "auth_managed"
-            };
-            await databaseService.insertSystemUser(fallbackProfile);
-            
-            const sessionUser = {
-              ...fallbackProfile,
-              email_confirmado: !!authData.user.email_confirmed_at
-            };
-            setUser(sessionUser);
-            localStorage.setItem("pkm_user_session", JSON.stringify(sessionUser));
+            try {
+              const fallbackProfile = {
+                id: authData.user.id,
+                username: authData.user.email?.split("@")[0] || "user",
+                nome: authData.user.user_metadata?.nome || "Usuário",
+                role: "user" as const,
+                email: authData.user.email,
+                status: "Aguardando Assinatura",
+                plano_atual: "Plano Bronze",
+                plano_status: "Inativo",
+                ultimo_acesso: new Date().toISOString(),
+                password_hash: "auth_managed"
+              };
+              await databaseService.insertSystemUser(fallbackProfile).catch(err => {
+                console.warn("Failed to insert fallback profile row, proceeding anyway:", err);
+              });
+              
+              const sessionUser = {
+                ...fallbackProfile,
+                email_confirmado: !!authData.user.email_confirmed_at
+              };
+              setUser(sessionUser);
+              localStorage.setItem("pkm_user_session", JSON.stringify(sessionUser));
+            } catch (fallbackErr) {
+              console.error("Critical error in login profile fallback, proceeding with memory state:", fallbackErr);
+              const sessionUser = {
+                id: authData.user.id,
+                username: authData.user.email?.split("@")[0] || "user",
+                nome: "Usuário",
+                role: "user" as const,
+                email: authData.user.email,
+                status: "Assinatura Ativa",
+                plano_atual: "Plano Bronze",
+                plano_status: "Ativo",
+                email_confirmado: !!authData.user.email_confirmed_at
+              };
+              setUser(sessionUser as any);
+              localStorage.setItem("pkm_user_session", JSON.stringify(sessionUser));
+            }
           }
         }
       } else {
@@ -332,7 +400,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const cleanEmail = email.trim().toLowerCase();
       const cleanPhone = celular.trim();
       const cleanName = name.trim();
-      const cleanUsername = cleanEmail.split("@")[0].toLowerCase();
+      let cleanUsername = cleanEmail.split("@")[0].toLowerCase();
 
       // 1. Password validations
       if (passwordOrToken.length < 8) {
@@ -346,19 +414,58 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       // 2. Validate uniqueness of Email, Phone, and Username in public.users first (instant feedback)
-      const usersList = await databaseService.getSystemUsers();
-      if (usersList && usersList.length > 0) {
-        const emailExists = usersList.some(u => u.email?.toLowerCase() === cleanEmail);
-        if (emailExists) {
-          throw new Error("Este e-mail já está em uso por outra conta.");
+      try {
+        const checkRes = await fetch(`/api/auth/check-uniqueness?email=${encodeURIComponent(cleanEmail)}&username=${encodeURIComponent(cleanUsername)}&celular=${encodeURIComponent(cleanPhone)}`);
+        if (checkRes.ok) {
+          const check = await checkRes.json();
+          if (check.emailExists) {
+            throw new Error("Este e-mail já está em uso por outra conta.");
+          }
+          if (check.celularExists) {
+            throw new Error("Este celular já está em uso por outra conta.");
+          }
+          if (check.usernameExists) {
+            // Automatically append suffix instead of throwing error to ensure zero-friction registration!
+            let uniqueUsername = cleanUsername;
+            let suffix = 1;
+            let exists = true;
+            while (exists) {
+              const uCheckRes = await fetch(`/api/auth/check-uniqueness?username=${encodeURIComponent(uniqueUsername + suffix)}`);
+              if (uCheckRes.ok) {
+                const innerCheck = await uCheckRes.json();
+                if (!innerCheck.usernameExists) {
+                  uniqueUsername = uniqueUsername + suffix;
+                  exists = false;
+                } else {
+                  suffix++;
+                }
+              } else {
+                uniqueUsername = uniqueUsername + suffix;
+                exists = false;
+              }
+            }
+            cleanUsername = uniqueUsername;
+          }
         }
-        const phoneExists = usersList.some(u => u.celular === cleanPhone);
-        if (phoneExists) {
-          throw new Error("Este celular já está em uso por outra conta.");
+      } catch (checkErr: any) {
+        if (checkErr.message?.includes("em uso")) {
+          throw checkErr;
         }
-        const usernameExists = usersList.some(u => u.username?.toLowerCase() === cleanUsername);
-        if (usernameExists) {
-          throw new Error("Este nome de usuário já está em uso. Escolha outro.");
+        console.warn("Uniqueness check API failed, falling back to legacy check:", checkErr);
+        const usersList = await databaseService.getSystemUsers().catch(() => []);
+        if (usersList && usersList.length > 0) {
+          const emailExists = usersList.some(u => u.email?.toLowerCase() === cleanEmail);
+          if (emailExists) {
+            throw new Error("Este e-mail já está em uso por outra conta.");
+          }
+          const phoneExists = usersList.some(u => u.celular === cleanPhone);
+          if (phoneExists) {
+            throw new Error("Este celular já está em uso por outra conta.");
+          }
+          const usernameExists = usersList.some(u => u.username?.toLowerCase() === cleanUsername);
+          if (usernameExists) {
+            throw new Error("Este nome de usuário já está em uso. Escolha outro.");
+          }
         }
       }
 
@@ -408,8 +515,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             .insert([profilePayload]);
 
           if (insertErr) {
-            console.warn("Direct insert profile failed. Falling back to helper...", insertErr);
-            await databaseService.insertSystemUser(profilePayload as any);
+            if (insertErr.code === "23505" || insertErr.message?.includes("duplicate key") || insertErr.message?.includes("already exists")) {
+              console.log("Profile already exists in database during signup insert (duplicate key caught). Continuing...");
+            } else {
+              console.warn("Direct insert profile failed. Falling back to helper...", insertErr);
+              await databaseService.insertSystemUser(profilePayload as any).catch(e => {
+                console.warn("Helper insert failed during signup:", e);
+              });
+            }
           }
         } else {
           console.log("Profile already exists. Updating existing details...");

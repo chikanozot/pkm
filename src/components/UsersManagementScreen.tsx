@@ -190,10 +190,25 @@ export const UsersManagementScreen: React.FC = () => {
         throw new Error("Este endereço de e-mail já está cadastrado no sistema.");
       }
 
-      const rawUrl = (import.meta as any).env?.VITE_SUPABASE_URL || "";
-      const rawKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || "";
+      let rawUrl = (import.meta as any).env?.VITE_SUPABASE_URL || "";
+      let rawKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || "";
       
-      if (!rawUrl || !rawKey) {
+      if (!rawUrl || !rawKey || rawUrl.includes("placeholder-please-set")) {
+        try {
+          const configRes = await fetch("/api/supabase-config");
+          if (configRes.ok) {
+            const configData = await configRes.json();
+            if (configData.supabaseUrl && configData.supabaseAnonKey) {
+              rawUrl = configData.supabaseUrl;
+              rawKey = configData.supabaseAnonKey;
+            }
+          }
+        } catch (fetchErr) {
+          console.error("Erro ao obter configurações do servidor:", fetchErr);
+        }
+      }
+
+      if (!rawUrl || !rawKey || rawUrl.includes("placeholder-please-set")) {
         throw new Error("Configurações do Supabase não encontradas. Verifique as variáveis de ambiente.");
       }
 

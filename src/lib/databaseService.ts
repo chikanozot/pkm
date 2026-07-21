@@ -1083,6 +1083,27 @@ export const databaseService = {
   async getUserProfile(userId: string): Promise<any | null> {
     checkSupabase();
     try {
+      // 1. Try to fetch from the secure server API first to bypass RLS recursion bugs
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.access_token) {
+          const response = await fetch(`/api/user/profile?userId=${userId}`, {
+            headers: {
+              "Authorization": `Bearer ${session.access_token}`
+            }
+          });
+          if (response.ok) {
+            const result = await response.json();
+            if (result && result.profile) {
+              return result.profile;
+            }
+          }
+        }
+      } catch (apiErr) {
+        console.warn("[Database Service] Server-side profile fetch failed, falling back to direct query:", apiErr);
+      }
+
+      // 2. Fallback to direct client select (subject to RLS)
       const { data, error } = await supabase
         .from("users")
         .select("*")
@@ -1216,7 +1237,8 @@ export const databaseService = {
       p_username: payload.username,
       p_password: payload.password_hash || "",
       p_nome: payload.nome,
-      p_role: payload.role
+      p_role: payload.role,
+      p_id: payload.id || null
     });
 
     if (rpcError) throw rpcError;

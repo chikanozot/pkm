@@ -104,8 +104,8 @@ begin
 end;
 $$ language plpgsql security definer;
 
--- Função: Criar usuário do sistema
-create or replace function public.create_system_user(p_username text, p_password text, p_nome text, p_role text default 'user')
+-- Função: Criar usuário do sistema (com suporte a preservar UUID do auth)
+create or replace function public.create_system_user(p_username text, p_password text, p_nome text, p_role text default 'user', p_id uuid default null)
 returns table (
   id uuid,
   username text,
@@ -116,8 +116,8 @@ returns table (
 declare
   v_user_id uuid;
 begin
-  insert into public.users (username, password_hash, nome, role)
-  values (lower(p_username), crypt(p_password, gen_salt('bf', 8)), p_nome, p_role)
+  insert into public.users (id, username, password_hash, nome, role)
+  values (coalesce(p_id, gen_random_uuid()), lower(p_username), crypt(p_password, gen_salt('bf', 8)), p_nome, p_role)
   returning public.users.id into v_user_id;
 
   return query
@@ -504,6 +504,11 @@ drop policy if exists "Permitir leitura do próprio perfil" on public.users;
 create policy "Permitir leitura do próprio perfil"
 on public.users for select
 using (auth.uid() = id);
+
+drop policy if exists "Permitir inserção do próprio perfil" on public.users;
+create policy "Permitir inserção do próprio perfil"
+on public.users for insert
+with check (auth.uid() = id);
 
 drop policy if exists "Permitir leitura completa para master" on public.users;
 create policy "Permitir leitura completa para master"
