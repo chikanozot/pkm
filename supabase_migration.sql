@@ -113,6 +113,8 @@ WITH CHECK (auth.uid() = id);
 
 -- 2. Atualizar a função 'create_system_user' para aceitar o UUID original gerado pelo Supabase Auth (p_id)
 -- para evitar gerar um ID aleatório diferente do ID de login do usuário, o que causa violações de chave estrangeira (FK)
+DROP FUNCTION IF EXISTS public.create_system_user(text, text, text, text) CASCADE;
+
 CREATE OR REPLACE FUNCTION public.create_system_user(p_username text, p_password text, p_nome text, p_role text DEFAULT 'user', p_id uuid DEFAULT NULL)
 RETURNS TABLE (
   id uuid,

@@ -38,7 +38,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         try {
           console.warn(`Profile for user ${supabaseUserId} is missing. Recreating profile dynamically...`);
           const cleanEmail = authEmail.toLowerCase().trim();
-          const baseUsername = cleanEmail.split("@")[0];
+          let baseUsername = cleanEmail.split("@")[0].replace(/[^a-z0-9]/g, "").toLowerCase();
+          if (!baseUsername) {
+            baseUsername = "user" + Math.floor(1000 + Math.random() * 9000);
+          }
           
           // Ensure username is unique to avoid unique constraint violations
           let uniqueUsername = baseUsername;
@@ -400,7 +403,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const cleanEmail = email.trim().toLowerCase();
       const cleanPhone = celular.trim();
       const cleanName = name.trim();
-      let cleanUsername = cleanEmail.split("@")[0].toLowerCase();
+      let cleanUsername = cleanEmail.split("@")[0].replace(/[^a-z0-9]/g, "").toLowerCase();
+      if (!cleanUsername) {
+        cleanUsername = "user" + Math.floor(1000 + Math.random() * 9000);
+      }
 
       // 1. Password validations
       if (passwordOrToken.length < 8) {

@@ -243,7 +243,7 @@ export const UsersManagementScreen: React.FC = () => {
 
       const userPayload = {
         id: authData.user.id,
-        username: createEmail.trim().toLowerCase().split("@")[0] + Math.random().toString(36).substring(2, 6),
+        username: (createEmail.trim().toLowerCase().split("@")[0].replace(/[^a-z0-9]/g, "") || "user") + Math.random().toString(36).substring(2, 6),
         password_hash: "auth_managed",
         nome: createNome.trim(),
         role: "user" as const,
