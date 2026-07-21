@@ -727,6 +727,39 @@ async function runSyncUserCalendar(userId: string, forceFull = false) {
     return { success: true, message: "Sync is disabled" };
   }
 
+  if (supabase) {
+    // Acquire a distributed lock to prevent concurrent sync executions across multiple containers/processes
+    const lockNow = new Date();
+    // Allow retrying or a new lock after 15 seconds (to handle failures/hangs safely)
+    const lockExpiry = new Date(lockNow.getTime() - 15000).toISOString();
+    
+    try {
+      const { data: lockData, error: lockErr } = await supabase
+        .from("google_connections")
+        .update({ 
+          last_sync_at: lockNow.toISOString(),
+          sync_status: "syncing"
+        })
+        .eq("user_id", userId)
+        .or(`last_sync_at.is.null,last_sync_at.lt.${lockExpiry}`)
+        .select();
+
+      if (lockErr || !lockData || lockData.length === 0) {
+        console.warn(`[Google Calendar Sync] Sync skipped for user ${userId} to prevent duplicate concurrent runs.`);
+        return { 
+          success: true, 
+          message: "Sincronização ignorada pois já existe outra em andamento ou executada recentemente.",
+          imported: 0,
+          updated: 0,
+          cancelled: 0
+        };
+      }
+    } catch (err) {
+      console.error(`[Google Calendar Sync] Error acquiring distributed lock:`, err);
+      return { success: false, error: "Erro ao iniciar a sincronização (concorrência)" };
+    }
+  }
+
   try {
     // 1. Locate the "ATENDIMENTOS" calendar ID
     const calendarId = await findCalendarByName(connection.access_token, "ATENDIMENTOS");
@@ -797,6 +830,17 @@ async function runSyncUserCalendar(userId: string, forceFull = false) {
 
     console.log(`[Google Calendar Sync] Fetched ${allEvents.length} events/changes from Google Calendar.`);
 
+    // Deduplicate allEvents array to ensure we do not process the same event ID twice within the same sync execution
+    const uniqueEvents: any[] = [];
+    const seenEventIds = new Set<string>();
+    for (const event of allEvents) {
+      if (event.id && !seenEventIds.has(event.id)) {
+        seenEventIds.add(event.id);
+        uniqueEvents.push(event);
+      }
+    }
+    allEvents = uniqueEvents;
+
     if (allEvents.length === 0 && nextSyncToken) {
       await updateConnectionSyncStatus(userId, "success", null, nextSyncToken);
       return { success: true, imported: 0, updated: 0, cancelled: 0 };
@@ -817,9 +861,17 @@ async function runSyncUserCalendar(userId: string, forceFull = false) {
       services = servicesData || [];
     }
 
+    const processedEventIdsInThisRun = new Set<string>();
+
     for (const event of allEvents) {
       const googleEventId = event.id;
       if (!googleEventId) continue;
+
+      if (processedEventIdsInThisRun.has(googleEventId)) {
+        console.log(`[Google Calendar Sync] Event ${googleEventId} already processed in this run. Skipping.`);
+        continue;
+      }
+      processedEventIdsInThisRun.add(googleEventId);
 
       console.log(`[Google Calendar Sync] Processing event: ${googleEventId} - "${event.summary || "(No Title)"}" (Status: ${event.status})`);
 
