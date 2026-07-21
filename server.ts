@@ -385,12 +385,16 @@ app.post("/api/calendar/event/create", async (req, res) => {
       return res.json({ connected: false, message: "Google Calendar not connected" });
     }
 
+    // Attempt to locate custom "ATENDIMENTOS" calendar, fall back to "primary"
+    const calendarId = await findCalendarByName(connection.access_token, "ATENDIMENTOS") || "primary";
+
     const eventId = await createGoogleCalendarEvent(connection.access_token, {
       summary,
       description: description || "",
       startDateTime,
       endDateTime,
       remindersMinutes: connection.lembretes_minutos,
+      calendarId,
     });
 
     res.json({ success: true, eventId });
@@ -422,12 +426,16 @@ app.post("/api/calendar/event/update", async (req, res) => {
       return res.json({ connected: false, message: "Google Calendar not connected" });
     }
 
+    // Attempt to locate custom "ATENDIMENTOS" calendar, fall back to "primary"
+    const calendarId = await findCalendarByName(connection.access_token, "ATENDIMENTOS") || "primary";
+
     await updateGoogleCalendarEvent(connection.access_token, eventId, {
       summary,
       description: description || "",
       startDateTime,
       endDateTime,
       remindersMinutes: connection.lembretes_minutos,
+      calendarId,
     });
 
     res.json({ success: true });
@@ -459,7 +467,10 @@ app.post("/api/calendar/event/delete", async (req, res) => {
       return res.json({ connected: false, message: "Google Calendar not connected" });
     }
 
-    await deleteGoogleCalendarEvent(connection.access_token, eventId);
+    // Attempt to locate custom "ATENDIMENTOS" calendar, fall back to "primary"
+    const calendarId = await findCalendarByName(connection.access_token, "ATENDIMENTOS") || "primary";
+
+    await deleteGoogleCalendarEvent(connection.access_token, eventId, calendarId);
     res.json({ success: true });
   } catch (err: any) {
     console.error("Error deleting Google Calendar event:", err);
@@ -672,7 +683,29 @@ async function updateConnectionSyncStatus(
   }
 }
 
+// Map to track active synchronization processes to prevent concurrency race conditions
+const activeSyncs = new Map<string, Promise<any>>();
+
 async function syncUserCalendar(userId: string, forceFull = false) {
+  const existingSync = activeSyncs.get(userId);
+  if (existingSync) {
+    console.log(`[Google Calendar Sync] Sync already in progress for user ${userId}. Reusing active promise.`);
+    return existingSync;
+  }
+
+  const syncPromise = (async () => {
+    try {
+      return await runSyncUserCalendar(userId, forceFull);
+    } finally {
+      activeSyncs.delete(userId);
+    }
+  })();
+
+  activeSyncs.set(userId, syncPromise);
+  return syncPromise;
+}
+
+async function runSyncUserCalendar(userId: string, forceFull = false) {
   console.log(`[Google Calendar Sync] Starting sync for user: ${userId}`);
   const supabase = getSupabase();
   let connection = null;
@@ -795,10 +828,18 @@ async function syncUserCalendar(userId: string, forceFull = false) {
         const { data: appData, error: appError } = await supabase
           .from("atendimentos")
           .select("*")
-          .eq("google_event_id", googleEventId)
-          .maybeSingle();
-        if (!appError) {
-          appointment = appData;
+          .eq("google_event_id", googleEventId);
+        if (!appError && appData && appData.length > 0) {
+          appointment = appData[0];
+          
+          if (appData.length > 1) {
+            console.warn(`[Google Calendar Sync] Found ${appData.length} duplicates for event ${googleEventId}. Cleaning up extras...`);
+            const idsToDelete = appData.slice(1).map((a: any) => a.id);
+            await supabase
+              .from("atendimentos")
+              .delete()
+              .in("id", idsToDelete);
+          }
         }
       }
 

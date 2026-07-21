@@ -944,9 +944,6 @@ export const databaseService = {
     if (fetchError) throw fetchError;
     const currentApp = data;
 
-    // We do NOT delete the Google Calendar event automatically when deleting system appointments,
-    // as per the requirement: "Não apagar automaticamente o evento do Google Calendar, a menos que isso seja explicitamente configurado."
-    /*
     if (currentApp?.google_event_id) {
       try {
         await fetch("/api/calendar/event/delete", {
@@ -958,7 +955,6 @@ export const databaseService = {
         console.error("Failed to delete from Google Agenda:", err);
       }
     }
-    */
 
     const { error } = await supabase
       .from("atendimentos")

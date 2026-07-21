@@ -168,6 +168,7 @@ export async function createGoogleCalendarEvent(
     startDateTime: string; // ISO String
     endDateTime: string;   // ISO String
     remindersMinutes?: number;
+    calendarId?: string;
   }
 ) {
   const eventData = {
@@ -190,7 +191,8 @@ export async function createGoogleCalendarEvent(
     },
   };
 
-  const response = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events", {
+  const calId = event.calendarId || "primary";
+  const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -218,6 +220,7 @@ export async function updateGoogleCalendarEvent(
     startDateTime: string;
     endDateTime: string;
     remindersMinutes?: number;
+    calendarId?: string;
   }
 ) {
   const eventData = {
@@ -240,8 +243,9 @@ export async function updateGoogleCalendarEvent(
     },
   };
 
+  const calId = event.calendarId || "primary";
   const response = await fetch(
-    `https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`,
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events/${eventId}`,
     {
       method: "PUT",
       headers: {
@@ -261,9 +265,10 @@ export async function updateGoogleCalendarEvent(
 }
 
 // 7. Delete Google Calendar Event
-export async function deleteGoogleCalendarEvent(accessToken: string, eventId: string) {
+export async function deleteGoogleCalendarEvent(accessToken: string, eventId: string, calendarId?: string) {
+  const calId = calendarId || "primary";
   const response = await fetch(
-    `https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`,
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}/events/${eventId}`,
     {
       method: "DELETE",
       headers: {
