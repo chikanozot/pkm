@@ -84,17 +84,11 @@ ON public.saas_settings FOR SELECT USING (true);
 
 DROP POLICY IF EXISTS "Controle total de saas_settings para master" ON public.saas_settings;
 CREATE POLICY "Controle total de saas_settings para master"
-ON public.saas_settings FOR ALL USING (public.is_master_user() OR EXISTS (
-    SELECT 1 FROM public.users u 
-    WHERE u.id = auth.uid() AND u.role = 'master'
-));
+ON public.saas_settings FOR ALL USING (public.is_master_user());
 
 DROP POLICY IF EXISTS "Controle total de saas_logs para master" ON public.saas_logs;
 CREATE POLICY "Controle total de saas_logs para master"
-ON public.saas_logs FOR ALL USING (public.is_master_user() OR EXISTS (
-    SELECT 1 FROM public.users u 
-    WHERE u.id = auth.uid() AND u.role = 'master'
-));
+ON public.saas_logs FOR ALL USING (public.is_master_user());
 
 -- 6.1 ATUALIZAR FUNÇÃO DE OBTER USUÁRIOS DO SISTEMA COM TODOS OS CAMPOS E SEGURANÇA
 CREATE OR REPLACE FUNCTION public.get_system_users()
@@ -177,12 +171,7 @@ USING (auth.uid() = id);
 DROP POLICY IF EXISTS "Permitir leitura completa para master" ON public.users;
 CREATE POLICY "Permitir leitura completa para master"
 ON public.users FOR SELECT
-USING (
-  public.is_master_user() OR EXISTS (
-    SELECT 1 FROM public.users u 
-    WHERE u.id = auth.uid() AND u.role = 'master'
-  )
-);
+USING (public.is_master_user());
 
 DROP POLICY IF EXISTS "Permitir atualização do próprio perfil" ON public.users;
 CREATE POLICY "Permitir atualização do próprio perfil"
@@ -192,12 +181,7 @@ USING (auth.uid() = id);
 DROP POLICY IF EXISTS "Controle total de usuários para master" ON public.users;
 CREATE POLICY "Controle total de usuários para master"
 ON public.users FOR ALL
-USING (
-  public.is_master_user() OR EXISTS (
-    SELECT 1 FROM public.users u 
-    WHERE u.id = auth.uid() AND u.role = 'master'
-  )
-);
+USING (public.is_master_user());
 
 -- 7. ATUALIZAR STATUS DO USUÁRIO MASTER 'zotgod'
 -- Garante que o administrador master zotgod existente tenha papel 'master' e status 'Assinatura Ativa'

@@ -127,14 +127,14 @@ export const UsersManagementScreen: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [currentUser?.id]);
 
   const loadData = async () => {
     setLoading(true);
     setError(null);
     try {
       // 1. Fetch Users
-      const fetchedUsers = await databaseService.getSystemUsers();
+      const fetchedUsers = await databaseService.getSystemUsers(currentUser?.id);
       setUsers(fetchedUsers || []);
 
       // 2. Fetch Logs
@@ -354,6 +354,16 @@ export const UsersManagementScreen: React.FC = () => {
     setChangePlanName(user.plano_atual || "Plano Bronze");
     setChangePlanPrice(Number(user.plano_valor) || 49.90);
     setChangeStatus(user.status || "Aguardando Assinatura");
+    
+    // Default manual payment values
+    setManualPlanName(user.plano_atual || "Plano Bronze");
+    setManualPlanPrice(Number(user.plano_valor) || 49.90);
+    const todayStr = new Date().toISOString().split("T")[0];
+    setManualStartDate(todayStr);
+    const nextMonth = new Date();
+    nextMonth.setDate(nextMonth.getDate() + 30);
+    setManualEndDate(nextMonth.toISOString().split("T")[0]);
+
     setActionFormType("none");
     setIsActionModalOpen(true);
   };
@@ -438,7 +448,7 @@ export const UsersManagementScreen: React.FC = () => {
         plano_valor: Number(changePlanPrice)
       };
 
-      await databaseService.updateSystemUser(selectedUser.id, updates);
+      await databaseService.updateSystemUser(selectedUser.id, updates, currentUser?.id);
 
       // Log
       await databaseService.logSaaSAction({
@@ -484,7 +494,7 @@ export const UsersManagementScreen: React.FC = () => {
         updates.situacao_pagamento = "Pendente";
       }
 
-      await databaseService.updateSystemUser(selectedUser.id, updates);
+      await databaseService.updateSystemUser(selectedUser.id, updates, currentUser?.id);
 
       // Log
       await databaseService.logSaaSAction({
@@ -573,7 +583,7 @@ export const UsersManagementScreen: React.FC = () => {
         situacao_pagamento: "Pago"
       };
 
-      await databaseService.updateUserProfile(selectedUser.id, updates);
+      await databaseService.updateUserProfile(selectedUser.id, updates, currentUser?.id);
 
       // Audit logs in saas_logs
       const actionDesc = isRenewal 

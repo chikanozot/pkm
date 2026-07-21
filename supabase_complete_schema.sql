@@ -489,19 +489,13 @@ on public.saas_settings for select using (true);
 
 drop policy if exists "Controle total de saas_settings para master" on public.saas_settings;
 create policy "Controle total de saas_settings para master"
-on public.saas_settings for all using (public.is_master_user() or exists (
-    select 1 from public.users u 
-    where u.id = auth.uid() and u.role = 'master'
-));
+on public.saas_settings for all using (public.is_master_user());
 
 -- Logs Administrativos
 alter table public.saas_logs enable row level security;
 drop policy if exists "Controle total de saas_logs para master" on public.saas_logs;
 create policy "Controle total de saas_logs para master"
-on public.saas_logs for all using (public.is_master_user() or exists (
-    select 1 from public.users u 
-    where u.id = auth.uid() and u.role = 'master'
-));
+on public.saas_logs for all using (public.is_master_user());
 
 -- Tabela de Usuários (public.users)
 alter table public.users enable row level security;
@@ -514,12 +508,7 @@ using (auth.uid() = id);
 drop policy if exists "Permitir leitura completa para master" on public.users;
 create policy "Permitir leitura completa para master"
 on public.users for select
-using (
-  public.is_master_user() or exists (
-    select 1 from public.users u 
-    where u.id = auth.uid() and u.role = 'master'
-  )
-);
+using (public.is_master_user());
 
 drop policy if exists "Permitir atualização do próprio perfil" on public.users;
 create policy "Permitir atualização do próprio perfil"
@@ -529,12 +518,7 @@ using (auth.uid() = id);
 drop policy if exists "Controle total de usuários para master" on public.users;
 create policy "Controle total de usuários para master"
 on public.users for all
-using (
-  public.is_master_user() or exists (
-    select 1 from public.users u 
-    where u.id = auth.uid() and u.role = 'master'
-  )
-);
+using (public.is_master_user());
 
 
 -- =========================================================================

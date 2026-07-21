@@ -1024,11 +1024,13 @@ export const databaseService = {
   // ==========================================
   // USERS MANAGEMENT SERVICE (Master Only)
   // ==========================================
-  async getSystemUsers(): Promise<any[]> {
+  async getSystemUsers(adminId?: string): Promise<any[]> {
     checkSupabase();
     try {
       // 1. Try secure RPC get_system_users first (bypasses RLS secure-definer, restricted to role=master in DB)
-      const { data: rpcData, error: rpcError } = await supabase.rpc("get_system_users");
+      const { data: rpcData, error: rpcError } = await supabase.rpc("get_system_users", {
+        p_admin_id: adminId || null
+      });
 
       // Verify if RPC succeeded and returned updated SaaS columns like email or status
       if (!rpcError && rpcData && rpcData.length > 0 && ("email" in rpcData[0] || "status" in rpcData[0])) {
@@ -1074,7 +1076,7 @@ export const databaseService = {
     }
   },
 
-  async updateUserProfile(userId: string, payload: any): Promise<any | null> {
+  async updateUserProfile(userId: string, payload: any, adminId?: string): Promise<any | null> {
     checkSupabase();
     try {
       const { data, error } = await supabase
@@ -1084,7 +1086,19 @@ export const databaseService = {
         .select()
         .maybeSingle();
 
-      if (error) throw error;
+      if (error) {
+        console.warn("Direct updateUserProfile failed due to RLS/credentials, falling back to secure updateSystemUser", error);
+        const existing = await this.getUserProfile(userId);
+        if (existing) {
+          return await this.updateSystemUser(userId, {
+            username: existing.username,
+            nome: existing.nome,
+            role: existing.role,
+            ...payload
+          }, adminId);
+        }
+        throw error;
+      }
       return data;
     } catch (err) {
       console.error("Erro ao atualizar perfil do usuário", err);
@@ -1168,7 +1182,28 @@ export const databaseService = {
     return data && data[0];
   },
 
-  async updateSystemUser(id: string, payload: { username: string; password_hash?: string; nome: string; role: string; email?: string; celular?: string; empresa?: string; status?: string; plano_atual?: string; plano_status?: string; plano_valor?: number; plano_data_vencimento?: string }): Promise<any> {
+  async updateSystemUser(id: string, payload: { 
+    username: string; 
+    password_hash?: string; 
+    nome: string; 
+    role: string; 
+    email?: string; 
+    celular?: string; 
+    empresa?: string; 
+    status?: string; 
+    plano_atual?: string; 
+    plano_status?: string; 
+    plano_valor?: number; 
+    plano_data_vencimento?: string;
+    plano_data_contratacao?: string;
+    plano_data_renovacao?: string;
+    plano_gateway?: string;
+    plano_ultimo_pagamento?: string;
+    plano_proximo_pagamento?: string;
+    situacao_pagamento?: string;
+    observacoes_admin?: string;
+    must_change_password?: boolean;
+  }, adminId?: string): Promise<any> {
     checkSupabase();
     try {
       // Direct update to support new columns
@@ -1185,6 +1220,14 @@ export const databaseService = {
       if (payload.plano_status !== undefined) updateData.plano_status = payload.plano_status;
       if (payload.plano_valor !== undefined) updateData.plano_valor = payload.plano_valor;
       if (payload.plano_data_vencimento !== undefined) updateData.plano_data_vencimento = payload.plano_data_vencimento;
+      if (payload.plano_data_contratacao !== undefined) updateData.plano_data_contratacao = payload.plano_data_contratacao;
+      if (payload.plano_data_renovacao !== undefined) updateData.plano_data_renovacao = payload.plano_data_renovacao;
+      if (payload.plano_gateway !== undefined) updateData.plano_gateway = payload.plano_gateway;
+      if (payload.plano_ultimo_pagamento !== undefined) updateData.plano_ultimo_pagamento = payload.plano_ultimo_pagamento;
+      if (payload.plano_proximo_pagamento !== undefined) updateData.plano_proximo_pagamento = payload.plano_proximo_pagamento;
+      if (payload.situacao_pagamento !== undefined) updateData.situacao_pagamento = payload.situacao_pagamento;
+      if (payload.observacoes_admin !== undefined) updateData.observacoes_admin = payload.observacoes_admin;
+      if (payload.must_change_password !== undefined) updateData.must_change_password = payload.must_change_password;
 
       const { data, error } = await supabase
         .from("users")
@@ -1204,7 +1247,24 @@ export const databaseService = {
       p_username: payload.username,
       p_password: payload.password_hash || "",
       p_nome: payload.nome,
-      p_role: payload.role
+      p_role: payload.role,
+      p_email: payload.email !== undefined ? payload.email : null,
+      p_celular: payload.celular !== undefined ? payload.celular : null,
+      p_empresa: payload.empresa !== undefined ? payload.empresa : null,
+      p_status: payload.status !== undefined ? payload.status : null,
+      p_plano_atual: payload.plano_atual !== undefined ? payload.plano_atual : null,
+      p_plano_status: payload.plano_status !== undefined ? payload.plano_status : null,
+      p_plano_valor: payload.plano_valor !== undefined ? payload.plano_valor : null,
+      p_plano_data_vencimento: payload.plano_data_vencimento !== undefined ? payload.plano_data_vencimento : null,
+      p_plano_data_contratacao: payload.plano_data_contratacao !== undefined ? payload.plano_data_contratacao : null,
+      p_plano_data_renovacao: payload.plano_data_renovacao !== undefined ? payload.plano_data_renovacao : null,
+      p_plano_gateway: payload.plano_gateway !== undefined ? payload.plano_gateway : null,
+      p_plano_ultimo_pagamento: payload.plano_ultimo_pagamento !== undefined ? payload.plano_ultimo_pagamento : null,
+      p_plano_proximo_pagamento: payload.plano_proximo_pagamento !== undefined ? payload.plano_proximo_pagamento : null,
+      p_situacao_pagamento: payload.situacao_pagamento !== undefined ? payload.situacao_pagamento : null,
+      p_observacoes_admin: payload.observacoes_admin !== undefined ? payload.observacoes_admin : null,
+      p_must_change_password: payload.must_change_password !== undefined ? payload.must_change_password : null,
+      p_admin_id: adminId || null
     });
 
     if (rpcError) throw rpcError;
