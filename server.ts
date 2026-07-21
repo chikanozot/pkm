@@ -911,6 +911,216 @@ setInterval(async () => {
 
 
 // ==========================================
+// Admin/Master SaaS API Endpoints
+// ==========================================
+
+// Helper function to verify master administrator role server-side
+async function verifyMasterAdmin(supabaseClient: any, adminId: string): Promise<boolean> {
+  if (!adminId) return false;
+  
+  // If the server doesn't have the service_role key configured, it uses the anon key.
+  // With the anon key, RLS will block reading other users' profiles, making verification impossible server-side.
+  // In this case, we return false quietly and let the frontend fall back to direct Supabase client calls.
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.info(`[Admin Auth] Supabase service role key not configured. Bypassing server-side verification quietly.`);
+    return false;
+  }
+
+  try {
+    const { data, error } = await supabaseClient
+      .from("users")
+      .select("role")
+      .eq("id", adminId)
+      .maybeSingle();
+
+    if (error || !data) {
+      console.warn(`[Admin Auth] Failed to verify user ${adminId}:`, error);
+      return false;
+    }
+    return data.role === "master";
+  } catch (err) {
+    console.error("[Admin Auth] Exception verifying master admin:", err);
+    return false;
+  }
+}
+
+// 1. Get All System Users (Bypasses RLS safely if server client has service_role key)
+app.get("/api/admin/get-users", async (req, res) => {
+  try {
+    const { adminId } = req.query;
+    if (!adminId || typeof adminId !== "string") {
+      return res.status(400).json({ error: "adminId query parameter is required" });
+    }
+
+    const supabaseClient = getSupabase();
+    if (!supabaseClient) {
+      return res.status(500).json({ error: "Supabase client not initialized on server" });
+    }
+
+    const isMaster = await verifyMasterAdmin(supabaseClient, adminId);
+    if (!isMaster) {
+      return res.status(403).json({ error: "Acesso negado. Apenas usuários MASTER podem listar os usuários." });
+    }
+
+    const { data: users, error } = await supabaseClient
+      .from("users")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("[Admin API] Error fetching users:", error);
+      throw error;
+    }
+
+    return res.json({ users: users || [] });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// 2. Create System User
+app.post("/api/admin/create-user", async (req, res) => {
+  try {
+    const { adminId, payload } = req.body;
+    if (!adminId || typeof adminId !== "string") {
+      return res.status(400).json({ error: "adminId is required" });
+    }
+    if (!payload) {
+      return res.status(400).json({ error: "payload is required" });
+    }
+
+    const supabaseClient = getSupabase();
+    if (!supabaseClient) {
+      return res.status(500).json({ error: "Supabase client not initialized on server" });
+    }
+
+    const isMaster = await verifyMasterAdmin(supabaseClient, adminId);
+    if (!isMaster) {
+      return res.status(403).json({ error: "Acesso negado. Apenas usuários MASTER podem criar usuários." });
+    }
+
+    // Prepare insert object with lowercase username
+    const insertObj = {
+      ...payload,
+      username: payload.username?.toLowerCase()
+    };
+
+    const { data: user, error } = await supabaseClient
+      .from("users")
+      .insert([insertObj])
+      .select()
+      .single();
+
+    if (error) {
+      console.error("[Admin API] Error creating user:", error);
+      throw error;
+    }
+
+    return res.json({ user });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// 3. Update System User
+app.post("/api/admin/update-user", async (req, res) => {
+  try {
+    const { adminId, userId, payload } = req.body;
+    if (!adminId || typeof adminId !== "string") {
+      return res.status(400).json({ error: "adminId is required" });
+    }
+    if (!userId || typeof userId !== "string") {
+      return res.status(400).json({ error: "userId is required" });
+    }
+    if (!payload) {
+      return res.status(400).json({ error: "payload is required" });
+    }
+
+    const supabaseClient = getSupabase();
+    if (!supabaseClient) {
+      return res.status(500).json({ error: "Supabase client not initialized on server" });
+    }
+
+    const isMaster = await verifyMasterAdmin(supabaseClient, adminId);
+    if (!isMaster) {
+      return res.status(403).json({ error: "Acesso negado. Apenas usuários MASTER podem editar usuários." });
+    }
+
+    const updateObj = {
+      ...payload,
+      username: payload.username?.toLowerCase()
+    };
+
+    const { data: user, error } = await supabaseClient
+      .from("users")
+      .update(updateObj)
+      .eq("id", userId)
+      .select()
+      .maybeSingle();
+
+    if (error) {
+      console.error("[Admin API] Error updating user:", error);
+      throw error;
+    }
+
+    return res.json({ user });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// 4. Delete System User
+app.post("/api/admin/delete-user", async (req, res) => {
+  try {
+    const { adminId, userId } = req.body;
+    if (!adminId || typeof adminId !== "string") {
+      return res.status(400).json({ error: "adminId is required" });
+    }
+    if (!userId || typeof userId !== "string") {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const supabaseClient = getSupabase();
+    if (!supabaseClient) {
+      return res.status(500).json({ error: "Supabase client not initialized on server" });
+    }
+
+    const isMaster = await verifyMasterAdmin(supabaseClient, adminId);
+    if (!isMaster) {
+      return res.status(403).json({ error: "Acesso negado. Apenas usuários MASTER podem excluir usuários." });
+    }
+
+    // Try executing RPC first to clean dependencies, otherwise direct delete
+    try {
+      const { error: rpcErr } = await supabaseClient.rpc("delete_system_user", {
+        p_user_id: userId
+      });
+      if (!rpcErr) {
+        return res.json({ success: true });
+      }
+      console.warn("[Admin API] RPC delete failed, falling back to direct delete:", rpcErr);
+    } catch (rpcEx) {
+      console.warn("[Admin API] RPC delete threw exception, falling back to direct delete:", rpcEx);
+    }
+
+    const { error } = await supabaseClient
+      .from("users")
+      .delete()
+      .eq("id", userId);
+
+    if (error) {
+      console.error("[Admin API] Error deleting user:", error);
+      throw error;
+    }
+
+    return res.json({ success: true });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+
+// ==========================================
 // Vite Integration & Production Server Setup
 // ==========================================
 

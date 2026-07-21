@@ -1027,17 +1027,43 @@ export const databaseService = {
   async getSystemUsers(adminId?: string): Promise<any[]> {
     checkSupabase();
     try {
-      // 1. Try secure RPC get_system_users first (bypasses RLS secure-definer, restricted to role=master in DB)
-      const { data: rpcData, error: rpcError } = await supabase.rpc("get_system_users", {
+      // 1. Try fetching via our secure backend API route first!
+      // This is the most reliable way because the server-side client can use the service role key to bypass RLS safely,
+      // and verifies the admin's master role server-side.
+      if (adminId) {
+        try {
+          const response = await fetch(`/api/admin/get-users?adminId=${adminId}`);
+          if (response.ok) {
+            const result = await response.json();
+            if (result && result.users) {
+              return result.users;
+            }
+          }
+        } catch (apiErr) {
+          console.warn("Error fetching users via server API, falling back to RPC/Direct:", apiErr);
+        }
+      }
+
+      // 2. Fallback to secure RPC get_system_users (bypasses RLS secure-definer, restricted to role=master in DB)
+      let { data: rpcData, error: rpcError } = await supabase.rpc("get_system_users", {
         p_admin_id: adminId || null
       });
 
-      // Verify if RPC succeeded and returned updated SaaS columns like email or status
-      if (!rpcError && rpcData && rpcData.length > 0 && ("email" in rpcData[0] || "status" in rpcData[0])) {
+      // 2.1 If signature mismatch or function does not exist, try without parameter
+      if (rpcError && (rpcError.code === "42883" || rpcError.message?.includes("does not exist") || rpcError.message?.includes("parameter"))) {
+        const { data: fallbackData, error: fallbackError } = await supabase.rpc("get_system_users");
+        if (!fallbackError && fallbackData) {
+          rpcData = fallbackData;
+          rpcError = null;
+        }
+      }
+
+      // Verify if RPC succeeded and returned data
+      if (!rpcError && rpcData && rpcData.length > 0) {
         return rpcData;
       }
 
-      // 2. Fallback: Direct select on public.users table (in case RPC isn't updated but RLS policies are applied/disabled)
+      // 3. Fallback: Direct select on public.users table (in case RPC isn't updated but RLS policies are applied/disabled)
       const { data: directData, error: directError } = await supabase
         .from("users")
         .select("*")
@@ -1047,12 +1073,7 @@ export const databaseService = {
         return directData;
       }
 
-      // 3. Last Resort Fallback: If direct select returns 0 rows due to RLS but we have basic data from RPC
-      if (!rpcError && rpcData && rpcData.length > 0) {
-        return rpcData;
-      }
-
-      return directData || rpcData || [];
+      return rpcData || directData || [];
     } catch (err) {
       console.error("Erro ao carregar usuários", err);
       return [];
@@ -1129,8 +1150,28 @@ export const databaseService = {
     plano_ultimo_pagamento?: string;
     plano_proximo_pagamento?: string;
     situacao_pagamento?: string;
-  }): Promise<any> {
+  }, adminId?: string): Promise<any> {
     checkSupabase();
+
+    // 1. Try secure server-side API first
+    if (adminId) {
+      try {
+        const response = await fetch("/api/admin/create-user", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ adminId, payload })
+        });
+        if (response.ok) {
+          const result = await response.json();
+          if (result && result.user) {
+            return result.user;
+          }
+        }
+      } catch (apiErr) {
+        console.warn("Error creating user via server API, falling back to direct/RPC:", apiErr);
+      }
+    }
+
     try {
       // Direct insert into the table to support newly added columns
       const insertObj: any = {
@@ -1179,7 +1220,18 @@ export const databaseService = {
     });
 
     if (rpcError) throw rpcError;
-    return data && data[0];
+    
+    // If it succeeded with RPC but couldn't write columns directly, we can try to update the newly created user's columns!
+    const createdUser = data && data[0];
+    if (createdUser && createdUser.id && adminId) {
+      try {
+        await this.updateSystemUser(createdUser.id, payload, adminId);
+      } catch (updateErr) {
+        console.warn("Failed to set extended columns on user fallback creation:", updateErr);
+      }
+    }
+    
+    return createdUser;
   },
 
   async updateSystemUser(id: string, payload: { 
@@ -1205,6 +1257,26 @@ export const databaseService = {
     must_change_password?: boolean;
   }, adminId?: string): Promise<any> {
     checkSupabase();
+
+    // 1. Try secure server-side API first
+    if (adminId) {
+      try {
+        const response = await fetch("/api/admin/update-user", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ adminId, userId: id, payload })
+        });
+        if (response.ok) {
+          const result = await response.json();
+          if (result && result.user) {
+            return result.user;
+          }
+        }
+      } catch (apiErr) {
+        console.warn("Error updating user via server API, falling back to direct/RPC:", apiErr);
+      }
+    }
+
     try {
       // Direct update to support new columns
       const updateData: any = {
@@ -1271,8 +1343,27 @@ export const databaseService = {
     return data && data[0];
   },
 
-  async deleteSystemUser(id: string): Promise<boolean> {
+  async deleteSystemUser(id: string, adminId?: string): Promise<boolean> {
     checkSupabase();
+
+    // 1. Try secure server-side API first
+    if (adminId) {
+      try {
+        const response = await fetch("/api/admin/delete-user", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ adminId, userId: id })
+        });
+        if (response.ok) {
+          const result = await response.json();
+          if (result && result.success) {
+            return true;
+          }
+        }
+      } catch (apiErr) {
+        console.warn("Error deleting user via server API, falling back to direct/RPC:", apiErr);
+      }
+    }
     
     try {
       // Tenta excluir chamando a função RPC (roda com segurança 'security definer' contornando cache do schema cache e RLS)

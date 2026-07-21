@@ -250,7 +250,7 @@ export const UsersManagementScreen: React.FC = () => {
         situacao_pagamento: "Pago"
       };
 
-      await databaseService.insertSystemUser(userPayload);
+      await databaseService.insertSystemUser(userPayload, currentUser?.id);
 
       // Register activity log
       await databaseService.logSaaSAction({
@@ -523,7 +523,7 @@ export const UsersManagementScreen: React.FC = () => {
     }
     setLoading(true);
     try {
-      await databaseService.deleteSystemUser(selectedUser.id);
+      await databaseService.deleteSystemUser(selectedUser.id, currentUser?.id);
 
       // Log
       await databaseService.logSaaSAction({
