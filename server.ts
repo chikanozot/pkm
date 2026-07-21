@@ -1243,19 +1243,40 @@ app.post("/api/admin/delete-user", async (req, res) => {
 
 let stripeClient: Stripe | null = null;
 
-function getStripeClient(): Stripe | null {
-  if (!stripeClient) {
-    // Priority: environment variables
-    const key = process.env.STRIPE_SECRET_KEY || "";
-    if (key) {
-      stripeClient = new Stripe(key, {
+async function getStripeClientAsync(supabaseClient: any): Promise<Stripe | null> {
+  if (stripeClient) return stripeClient;
+
+  // 1. Priority: environment variables
+  const keyEnv = process.env.STRIPE_SECRET_KEY || "";
+  if (keyEnv && !keyEnv.includes("placeholder")) {
+    stripeClient = new Stripe(keyEnv, {
+      apiVersion: "2025-01-27.acacia" as any,
+    });
+    return stripeClient;
+  }
+
+  // 2. Fall back to saas_settings in database
+  try {
+    const { data: settings } = await supabaseClient
+      .from("saas_settings")
+      .select("mercado_pago_access_token")
+      .limit(1)
+      .maybeSingle();
+    
+    const keyDb = settings?.mercado_pago_access_token || "";
+    if (keyDb && keyDb.startsWith("sk_")) {
+      console.log("[Stripe SDK] Utilizando chave secreta do Stripe encontrada no banco de dados.");
+      stripeClient = new Stripe(keyDb, {
         apiVersion: "2025-01-27.acacia" as any,
       });
-    } else {
-      console.warn("[Stripe SDK] Warning: STRIPE_SECRET_KEY is not defined in process.env.");
+      return stripeClient;
     }
+  } catch (err) {
+    console.error("[Stripe SDK] Erro ao buscar chave de API do Stripe no banco de dados:", err);
   }
-  return stripeClient;
+
+  console.warn("[Stripe SDK] Nenhuma chave secreta válida do Stripe encontrada (env ou DB).");
+  return null;
 }
 
 // Memory cache to prevent duplicate webhook processing
@@ -1308,7 +1329,7 @@ async function findUserByStripeData(supabaseClient: any, data: { userId?: string
 
 // Core Webhook Event Processor
 async function processStripeEvent(event: any, supabaseClient: any) {
-  const stripe = getStripeClient();
+  const stripe = await getStripeClientAsync(supabaseClient);
 
   switch (event.type) {
     case "checkout.session.completed": {
@@ -1563,12 +1584,17 @@ async function processStripeEvent(event: any, supabaseClient: any) {
   }
 }
 
-// Webhook HTTP Endpoint
-app.post("/api/webhooks/stripe", async (req: any, res) => {
+// Webhook HTTP Endpoint Core Logic
+const handleStripeWebhook = async (req: any, res: any) => {
   const sig = req.headers["stripe-signature"];
   const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET || "";
 
-  const stripe = getStripeClient();
+  const supabaseClient = getSupabase();
+  if (!supabaseClient) {
+    return res.status(500).send("Cliente do Supabase não foi inicializado.");
+  }
+
+  const stripe = await getStripeClientAsync(supabaseClient);
   if (!stripe) {
     return res.status(500).json({ error: "Stripe não está configurado no servidor." });
   }
@@ -1589,7 +1615,7 @@ app.post("/api/webhooks/stripe", async (req: any, res) => {
       event = req.body;
     } else {
       console.error("[Stripe Webhook] Rejeitado: assinatura ou segredo do webhook ausente.");
-      return res.status(400).send("Assinatura ausente.");
+      return res.status(400).send("Assinatura ou segredo ausente.");
     }
   }
 
@@ -1600,18 +1626,16 @@ app.post("/api/webhooks/stripe", async (req: any, res) => {
   }
 
   try {
-    const supabaseClient = getSupabase();
-    if (!supabaseClient) {
-      return res.status(500).send("Cliente do Supabase não foi inicializado.");
-    }
-
     await processStripeEvent(event, supabaseClient);
     return res.json({ received: true });
   } catch (err: any) {
     console.error("[Stripe Webhook] Erro de processamento interno:", err);
     return res.status(500).send(`Erro interno: ${err.message}`);
   }
-});
+};
+
+app.post("/api/webhooks/stripe", handleStripeWebhook);
+app.post("/functions/v1/stripe-webhook", handleStripeWebhook);
 
 // Dynamic Checkout Session Creation Endpoint
 app.post("/api/payments/create-checkout-session", async (req, res) => {
@@ -1621,7 +1645,12 @@ app.post("/api/payments/create-checkout-session", async (req, res) => {
       return res.status(400).json({ error: "Parâmetros planId e userId são obrigatórios." });
     }
 
-    const stripe = getStripeClient();
+    const supabaseClient = getSupabase();
+    if (!supabaseClient) {
+      return res.status(500).json({ error: "Cliente do Supabase não foi inicializado." });
+    }
+
+    const stripe = await getStripeClientAsync(supabaseClient);
     if (!stripe) {
       return res.status(500).json({ error: "Gateway de pagamentos Stripe não configurado." });
     }

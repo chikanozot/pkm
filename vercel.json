@@ -6,6 +6,10 @@
       "destination": "/api/index.ts"
     },
     {
+      "source": "/functions/v1/stripe-webhook",
+      "destination": "/api/index.ts"
+    },
+    {
       "source": "/auth/google/callback",
       "destination": "/api/index.ts"
     },

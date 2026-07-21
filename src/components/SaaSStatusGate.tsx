@@ -15,7 +15,7 @@ export const SaaSStatusGate: React.FC = () => {
   
   // Checkout flow states
   const [selectedPlan, setSelectedPlan] = useState<any | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState<"pix" | "card">("pix");
+  const [paymentMethod, setPaymentMethod] = useState<"pix" | "card">("card");
   const [cardNumber, setCardNumber] = useState("");
   const [cardName, setCardName] = useState("");
   const [cardExpiry, setCardExpiry] = useState("");
@@ -24,6 +24,7 @@ export const SaaSStatusGate: React.FC = () => {
   const [checkoutStep, setCheckoutStep] = useState<"plans" | "checkout" | "success">("plans");
   const [copied, setCopied] = useState(false);
   const [saasSettings, setSaasSettings] = useState<any>(null);
+  const [errorStripe, setErrorStripe] = useState<string | null>(null);
 
   React.useEffect(() => {
     const fetchSettings = async () => {
@@ -167,6 +168,7 @@ export const SaaSStatusGate: React.FC = () => {
   const handleProcessPayment = async () => {
     if (!user || !selectedPlan) return;
     setLoading(true);
+    setErrorStripe(null);
     try {
       if (paymentMethod === "card") {
         console.log("[Stripe Integration] Iniciando Checkout Stripe para o plano:", selectedPlan.id);
@@ -188,11 +190,27 @@ export const SaaSStatusGate: React.FC = () => {
             // Redirect the user to the Stripe Checkout page
             window.location.href = data.url;
             return;
+          } else {
+            throw new Error("O servidor não retornou um link de checkout do Stripe.");
           }
+        } else {
+          let errorText = "Erro de rede ou chaves Stripe ausentes no servidor.";
+          try {
+            const errData = await response.json();
+            if (errData.error) {
+              errorText = errData.error;
+              if (errData.message) {
+                errorText += `: ${errData.message}`;
+              }
+            } else if (errData.message) {
+              errorText = errData.message;
+            }
+          } catch (_) {}
+          throw new Error(errorText);
         }
-        console.warn("[Stripe Integration] Falha ou chaves Stripe ausentes, executando fluxo de simulação local.");
       }
 
+      // Se for Pix, roda o simulador local normalmente
       const now = new Date();
       const nextMonth = new Date();
       nextMonth.setMonth(nextMonth.getMonth() + 1);
@@ -206,7 +224,7 @@ export const SaaSStatusGate: React.FC = () => {
         plano_data_contratacao: now.toISOString(),
         plano_data_renovacao: nextMonth.toISOString(),
         plano_data_vencimento: nextMonth.toISOString(),
-        plano_gateway: paymentMethod === "pix" ? "Pix" : "stripe",
+        plano_gateway: "Pix",
         plano_assinatura_id: "sub_" + Math.random().toString(36).substring(2, 11),
         plano_ultimo_pagamento: now.toISOString(),
         plano_proximo_pagamento: nextMonth.toISOString(),
@@ -220,7 +238,7 @@ export const SaaSStatusGate: React.FC = () => {
       await databaseService.logSaaSAction({
         admin_id: null,
         admin_nome: "SaaS Gateway",
-        acao: `Assinatura de plano processada: ${selectedPlan.id} por R$ ${selectedPlan.price.toFixed(2)} (${paymentMethod === "pix" ? "Pix" : "Cartão (Simulado)"})`,
+        acao: `Assinatura de plano processada: ${selectedPlan.id} por R$ ${selectedPlan.price.toFixed(2)} (Pix)`,
         user_id: user.id,
         user_nome: user.nome
       });
@@ -230,8 +248,9 @@ export const SaaSStatusGate: React.FC = () => {
       setTimeout(async () => {
         await reloadProfile();
       }, 3000);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Error processing payment:", err);
+      setErrorStripe(err.message || "Falha ao conectar com o serviço de pagamentos Stripe.");
     } finally {
       setLoading(false);
     }
@@ -407,6 +426,19 @@ export const SaaSStatusGate: React.FC = () => {
                 </div>
 
                 <div className="p-6 sm:p-8 space-y-6">
+                  {errorStripe && (
+                    <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-900 text-xs flex items-start gap-2.5">
+                      <ShieldAlert className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                      <div className="space-y-1">
+                        <h5 className="font-bold">Ocorreu um erro ao iniciar o checkout do Stripe</h5>
+                        <p className="text-red-700 leading-relaxed">{errorStripe}</p>
+                        <p className="text-[10px] text-red-500 font-bold mt-1">
+                          Dica para Administrador: Verifique se a chave de API do Stripe está configurada corretamente no painel administrativo ("Configurações Gerais - Chave Secreta do Stripe").
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Select payment method */}
                   <div className="grid grid-cols-2 gap-4">
                     <button
@@ -470,54 +502,20 @@ export const SaaSStatusGate: React.FC = () => {
                       </div>
                     </div>
                   ) : (
-                    <div className="space-y-4 bg-stone-50 p-6 rounded-2xl border border-stone-150">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Número do Cartão</label>
-                          <input
-                            type="text"
-                            placeholder="4444 4444 4444 4444"
-                            value={cardNumber}
-                            onChange={(e) => setCardNumber(e.target.value)}
-                            className="block w-full rounded-xl border border-stone-250 bg-white px-3.5 py-2.5 text-xs placeholder-stone-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500 transition-all shadow-sm"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Nome no Cartão</label>
-                          <input
-                            type="text"
-                            placeholder="MARIA O SILVA"
-                            value={cardName}
-                            onChange={(e) => setCardName(e.target.value)}
-                            className="block w-full rounded-xl border border-stone-250 bg-white px-3.5 py-2.5 text-xs placeholder-stone-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500 transition-all shadow-sm"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Data de Expiração</label>
-                          <input
-                            type="text"
-                            placeholder="MM/AA"
-                            value={cardExpiry}
-                            onChange={(e) => setCardExpiry(e.target.value)}
-                            className="block w-full rounded-xl border border-stone-250 bg-white px-3.5 py-2.5 text-xs placeholder-stone-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500 transition-all shadow-sm"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">Código CVV</label>
-                          <input
-                            type="text"
-                            placeholder="123"
-                            value={cardCvv}
-                            onChange={(e) => setCardCvv(e.target.value)}
-                            className="block w-full rounded-xl border border-stone-250 bg-white px-3.5 py-2.5 text-xs placeholder-stone-400 focus:border-rose-500 focus:outline-none focus:ring-1 focus:ring-rose-500 transition-all shadow-sm"
-                          />
-                        </div>
+                    <div className="space-y-4 bg-stone-50 p-6 rounded-2xl border border-stone-150 text-center">
+                      <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-500 flex items-center justify-center mx-auto border border-rose-100">
+                        <CreditCard className="w-6 h-6" />
                       </div>
-                      <p className="text-[10px] text-stone-400 text-center mt-2 flex items-center justify-center gap-1">
-                        <span>🔒</span> Transação criptografada de forma segura e processada via <strong>Stripe</strong>
+                      
+                      <div className="space-y-1 max-w-md mx-auto">
+                        <p className="text-xs font-bold text-stone-900">Pagamento Online via Stripe</p>
+                        <p className="text-[11px] text-stone-500 leading-relaxed">
+                          Para sua total segurança, nós não armazenamos os dados do seu cartão de crédito. Você será redirecionado para a página de checkout oficial e segura do <strong>Stripe</strong> para realizar o pagamento.
+                        </p>
+                      </div>
+
+                      <p className="text-[10px] text-stone-400 mt-2 flex items-center justify-center gap-1">
+                        <span>🔒</span> Conexão segura via HTTPS criptografada pelo gateway de pagamento <strong>Stripe</strong>
                       </p>
                     </div>
                   )}
@@ -538,7 +536,7 @@ export const SaaSStatusGate: React.FC = () => {
                       className="flex-1 cursor-pointer inline-flex items-center justify-center gap-2 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl shadow-md transition-all disabled:bg-stone-300 disabled:cursor-not-allowed"
                     >
                       <CheckCircle className="w-4 h-4" />
-                      {loading ? "Processando..." : (paymentMethod === "pix" ? "Confirmar Pagamento Pix" : "Ativar Minha Assinatura")}
+                      {loading ? "Processando..." : (paymentMethod === "pix" ? "Confirmar Pagamento Pix" : "Ir para o Pagamento Seguro (Stripe)")}
                     </button>
                   </div>
                 </div>
